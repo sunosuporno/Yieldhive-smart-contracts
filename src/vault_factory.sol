@@ -19,6 +19,8 @@ contract VaultStrategy is ERC4626, Ownable {
     IPool aavePool;
     IPoolDataProvider aaveProtocolDataProvider;
 
+    address public constant cbETH = 0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22;
+
     constructor(
         IERC20 asset_,
         uint256 _initialDeposit,
@@ -141,9 +143,31 @@ contract VaultStrategy is ERC4626, Ownable {
         bytes[] calldata priceUpdate,
         bytes32[] calldata priceFeedId
     ) internal {
+        // Get the price of the assets in USD from Pyth Network
+        int64 usdcPriceInUSD = getPricePyth(priceUpdate, priceFeedId[0]).price;
+        int64 cbEthPriceInUSD = getPricePyth(priceUpdate, priceFeedId[1]).price;
         // approve and supply the asset USDC to the Aave pool
         IERC20(assetAddress).approve(address(aavePool), amount);
         aavePool.supply(assetAddress, amount, address(this), 0);
+
+        // Convert the amount of USDC supplied in 18 decimals
+        uint256 usdcAmountIn18Decimals = amount * 10 ** 12;
+        // Finding total price of the asset supplied in USD
+        uint256 usdcAmountIn18DecimalsInUSD = (usdcAmountIn18Decimals *
+            (uint64(usdcPriceInUSD))) / 10 ** 8;
+        // Fetching LTV of USDC from Aave
+        (, uint256 ltv, , , , , , , , ) = aaveProtocolDataProvider
+            .getReserveConfigurationData(assetAddress);
+        // Calculating the maximum loan amount in USD
+        uint256 maxLoanAmountIn18DecimalsInUSD = (usdcAmountIn18DecimalsInUSD *
+            ltv) / 10 ** 5;
+        // Calculating the maximum amount of cbETH that can be borrowed
+        uint256 cbEthAbleToBorrow = (maxLoanAmountIn18DecimalsInUSD * 10 ** 8) /
+            uint64(cbEthPriceInUSD);
+        // Borrowing cbETH after calculating a safe amount
+        uint256 safeAmount = (cbEthAbleToBorrow * 95) / 100;
+        aavePool.borrow(cbETH, safeAmount, 2, 0, address(this));
+        uint256 cbEthBalance = IERC20(cbETH).balanceOf(address(this));
     }
 
     function getPricePyth(
