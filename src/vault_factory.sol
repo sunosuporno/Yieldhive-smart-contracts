@@ -9,10 +9,13 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IPool} from "./interfaces/IPool.sol";
 import {IPoolDataProvider} from "./interfaces/IPoolDataProvider.sol";
+import {IPyth} from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
+import {PythStructs} from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 
 contract VaultStrategy is ERC4626, Ownable {
     using Math for uint256;
     using SafeERC20 for IERC20;
+    IPyth pyth;
     IPool aavePool;
     IPoolDataProvider aaveProtocolDataProvider;
 
@@ -22,6 +25,7 @@ contract VaultStrategy is ERC4626, Ownable {
         address initialOwner,
         string memory name_,
         string memory symbol_,
+        address pythContract,
         address aavePoolContract,
         address aaveProtocolDataProviderContract
     )
@@ -31,6 +35,7 @@ contract VaultStrategy is ERC4626, Ownable {
         Ownable(initialOwner)
     {
         asset_.safeTransferFrom(msg.sender, address(this), _initialDeposit);
+        pyth = IPyth(pythContract);
         aavePool = IPool(aavePoolContract);
         aaveProtocolDataProvider = IPoolDataProvider(
             aaveProtocolDataProviderContract
@@ -139,5 +144,16 @@ contract VaultStrategy is ERC4626, Ownable {
         // approve and supply the asset USDC to the Aave pool
         IERC20(assetAddress).approve(address(aavePool), amount);
         aavePool.supply(assetAddress, amount, address(this), 0);
+    }
+
+    function getPricePyth(
+        bytes[] calldata priceUpdate,
+        bytes32 priceFeedId
+    ) public payable returns (PythStructs.Price memory) {
+        uint fee = pyth.getUpdateFee(priceUpdate);
+        pyth.updatePriceFeeds{value: fee}(priceUpdate);
+
+        PythStructs.Price memory price = pyth.getPrice(priceFeedId);
+        return price;
     }
 }
