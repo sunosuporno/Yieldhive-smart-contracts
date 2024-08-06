@@ -27,6 +27,10 @@ contract VaultStrategy is ERC4626, Ownable {
     address public constant cbETH = 0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22;
     address public constant AERO = 0x940181a94A35A4569E4529A3CDfB74e38FD98631;
     address public constant WETH9 = 0x4200000000000000000000000000000000000006;
+    address public constant aUSDC = 0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB;
+    address public constant variableDebtCbETH =
+        0x1DabC36f19909425f654777249815c073E8Fd79F;
+    uint256 public _totalAccountedAssets;
 
     constructor(
         IERC20 asset_,
@@ -232,6 +236,34 @@ contract VaultStrategy is ERC4626, Ownable {
         amountOutUSDC = abi.decode(result2, (uint256));
 
         return (amountOutUSDC, amountOutAERO);
+    }
+
+    function _harvestReinvestAndReport(
+        bytes[] calldata priceUpdate,
+        bytes32 priceFeedId
+    ) internal {
+        // Calculate net gains/loss in Aave
+        uint256 normalizedIncome = aavePool.getReserveNormalizedIncome(asset());
+
+        uint256 aUSDCBalance = IERC20(aUSDC).balanceOf(address(this));
+        uint256 suppliedUSDCValue = (aUSDCBalance * normalizedIncome) / 1e27;
+
+        uint256 normalizedVariableDebt = aavePool
+            .getReserveNormalizedVariableDebt(cbETH);
+
+        uint256 variableDebtBalance = IERC20(variableDebtCbETH).balanceOf(
+            address(this)
+        );
+        uint256 cbETHDebtValue = (variableDebtBalance *
+            normalizedVariableDebt) / 1e27;
+
+        int64 cbETHPrice = getPricePyth(priceUpdate, priceFeedId[0]).price;
+        int64 usdcPrice = getPricePyth(priceUpdate, priceFeedId[1]).price;
+        uint256 cbETHAmountInUSDC = uint64(cbETHPrice / usdcPrice);
+    }
+
+    function totalAssets() public view override returns (uint256) {
+        return _totalAccountedAssets;
     }
 
     function getPricePyth(
