@@ -194,46 +194,51 @@ contract VaultStrategy is ERC4626, Ownable {
         uint256 amountIn
     ) internal returns (uint256 amountOutUSDC, uint256 amountOutAERO) {
         address assetAddress = asset();
+        // Swap half of cbETH to AERO
+        amountOutAERO = _swap(cbETH, AERO, 500, 3000, amountIn / 2);
+
+        // Swap the other half of cbETH to USDC
+        amountOutUSDC = _swap(cbETH, assetAddress, 500, 500, amountIn / 2);
         // Approve the swapRouter to spend amountIn of cbETH
-        TransferHelper.safeApprove(cbETH, swapRouter, amountIn / 2);
+        // TransferHelper.safeApprove(cbETH, swapRouter, amountIn / 2);
 
-        // Encode the path for the swap
-        bytes memory path = abi.encodePacked(
-            cbETH,
-            uint24(500), // 0.05% fee for cbETH -> ETH
-            WETH9,
-            uint24(3000), // 0.3% fee for ETH -> AERO
-            AERO
-        );
-        // Encode the parameters for exactInput
-        bytes memory data = abi.encodeWithSignature(
-            "exactInput((bytes,address,uint256,uint256))",
-            abi.encode(path, address(this), amountIn / 2, 0)
-        );
-        // Perform the low-level call to the swapRouter
-        (bool success, bytes memory result) = swapRouter.call(data);
-        require(success, "Swap failed");
-        // Decode the result to get the amountOut
-        amountOutAERO = abi.decode(result, (uint256));
+        // // Encode the path for the swap
+        // bytes memory path = abi.encodePacked(
+        //     cbETH,
+        //     uint24(500), // 0.05% fee for cbETH -> ETH
+        //     WETH9,
+        //     uint24(3000), // 0.3% fee for ETH -> AERO
+        //     AERO
+        // );
+        // // Encode the parameters for exactInput
+        // bytes memory data = abi.encodeWithSignature(
+        //     "exactInput((bytes,address,uint256,uint256))",
+        //     abi.encode(path, address(this), amountIn / 2, 0)
+        // );
+        // // Perform the low-level call to the swapRouter
+        // (bool success, bytes memory result) = swapRouter.call(data);
+        // require(success, "Swap failed");
+        // // Decode the result to get the amountOut
+        // amountOutAERO = abi.decode(result, (uint256));
 
-        uint256 remainingcbETH = IERC20(cbETH).balanceOf(address(this));
+        // uint256 remainingcbETH = IERC20(cbETH).balanceOf(address(this));
 
-        bytes memory path2 = abi.encodePacked(
-            cbETH,
-            uint24(500), // 0.05% fee for cbETH -> ETH
-            WETH9,
-            uint24(500), // 0.05% fee for ETH -> USDC
-            assetAddress
-        );
+        // bytes memory path2 = abi.encodePacked(
+        //     cbETH,
+        //     uint24(500), // 0.05% fee for cbETH -> ETH
+        //     WETH9,
+        //     uint24(500), // 0.05% fee for ETH -> USDC
+        //     assetAddress
+        // );
 
-        bytes memory data2 = abi.encodeWithSignature(
-            "exactInput((bytes,address,uint256,uint256))",
-            abi.encode(path2, address(this), remainingcbETH, 0)
-        );
+        // bytes memory data2 = abi.encodeWithSignature(
+        //     "exactInput((bytes,address,uint256,uint256))",
+        //     abi.encode(path2, address(this), remainingcbETH, 0)
+        // );
 
-        (bool success2, bytes memory result2) = swapRouter.call(data2);
-        require(success2, "Swap failed");
-        amountOutUSDC = abi.decode(result2, (uint256));
+        // (bool success2, bytes memory result2) = swapRouter.call(data2);
+        // require(success2, "Swap failed");
+        // amountOutUSDC = abi.decode(result2, (uint256));
 
         return (amountOutUSDC, amountOutAERO);
     }
@@ -242,6 +247,10 @@ contract VaultStrategy is ERC4626, Ownable {
         bytes[] calldata priceUpdate,
         bytes32 priceFeedId
     ) internal {
+        int64 cbETHPrice = getPricePyth(priceUpdate, priceFeedId[0]).price;
+        int64 usdcPrice = getPricePyth(priceUpdate, priceFeedId[1]).price;
+        int64 aeroPriceInUSD = getPricePyth(priceUpdate, priceFeedId[2]).price;
+
         // Calculate net gains/loss in Aave
         uint256 normalizedIncome = aavePool.getReserveNormalizedIncome(asset());
 
@@ -257,9 +266,93 @@ contract VaultStrategy is ERC4626, Ownable {
         uint256 cbETHDebtValue = (variableDebtBalance *
             normalizedVariableDebt) / 1e27;
 
-        int64 cbETHPrice = getPricePyth(priceUpdate, priceFeedId[0]).price;
-        int64 usdcPrice = getPricePyth(priceUpdate, priceFeedId[1]).price;
-        uint256 cbETHAmountInUSDC = uint64(cbETHPrice / usdcPrice);
+        uint256 cbETHAmountInUSDC = (uint64(cbETHPrice) * cbETHDebtValue) /
+            (uint64(usdcPrice) * 10 ** 12);
+
+        // claim rewards and reInvest from Aerodrome Pool
+        aerodromePool.claimFees();
+        uint256 aeroBalance = IERC20(AERO).balanceOf(address(this));
+        uint256 usdcBalance = IERC20(asset()).balanceOf(address(this));
+        uint256 aeroAmountInUsd = ((uint64(aeroPriceInUSD) * aeroBalance) /
+            10) ^ 12;
+        uint256 usdcAmountInUsd = (uint64(usdcPrice) * usdcBalance);
+        if (aeroAmountInUsd > usdcAmountInUsd) {
+            uint256 aeroToSwap = ((aeroAmountInUsd - usdcAmountInUsd) *
+                10 ** 12) / (uint64(aeroPriceInUSD) * 2);
+            _swapAEROToUSDC(aeroToSwap);
+        } else {
+            uint256 usdcToSwap = (usdcAmountInUsd - aeroAmountInUsd) /
+                (uint64(usdcPrice) * 2);
+            _swapUSDCToAERO(usdcToSwap);
+        }
+        uint256 aeroBalanceAfterSwap = IERC20(AERO).balanceOf(address(this));
+        uint256 usdcBalanceAfterSwap = IERC20(asset()).balanceOf(address(this));
+        IERC20(AERO).safeTransfer(address(aerodromePool), aeroBalanceAfterSwap);
+        IERC20(asset()).safeTransfer(
+            address(aerodromePool),
+            usdcBalanceAfterSwap
+        );
+        aerodromePool.mint(address(this));
+        aerodromePool.skim(address(this));
+
+        // Calculate net gains/loss in Aerodrome
+        uint256 myLPBalance = IERC20(address(aerodromePool)).balanceOf(
+            address(this)
+        );
+        uint256 totalLPSupply = IERC20(address(aerodromePool)).totalSupply();
+        (uint256 reserve0, uint256 reserve1, ) = aerodromePool.getReserves();
+
+        uint256 myToken0Amount = (reserve0 * myLPBalance) / totalLPSupply;
+        uint256 myToken1Amount = (reserve1 * myLPBalance) / totalLPSupply;
+
+        uint256 aeroAmountInUSDC = (uint64(aeroPriceInUSD) * myToken1Amount) /
+            (uint64(usdcPrice) * 10 ** 12);
+
+        uint256 balUSDCRemaining = IERC20(asset()).balanceOf(address(this));
+        uint256 balAERORemaining = IERC20(AERO).balanceOf(address(this));
+
+        _totalAccountedAssets =
+            suppliedUSDCValue +
+            cbETHAmountInUSDC +
+            aeroAmountInUSDC;
+    }
+
+    function _swap(
+        address tokenIn,
+        address tokenOut,
+        uint256 fee1,
+        uint256 fee2,
+        uint256 amountIn
+    ) internal returns (uint256 amountOut) {
+        TransferHelper.safeApprove(tokenIn, swapRouter, amountIn);
+        bytes memory path = abi.encodePacked(
+            tokenIn,
+            uint24(fee1),
+            WETH9,
+            uint24(fee2),
+            tokenOut
+        );
+
+        bytes memory data = abi.encodeWithSignature(
+            "exactInput((bytes,address,uint256,uint256))",
+            abi.encode(path, address(this), amountIn, 0)
+        );
+
+        (bool success, bytes memory result) = swapRouter.call(data);
+        require(success, "Swap failed");
+        amountOut = abi.decode(result, (uint256));
+    }
+
+    function _swapAEROToUSDC(
+        uint256 amountIn
+    ) internal returns (uint256 amountOut) {
+        amountOut = _swap(AERO, asset(), 3000, 500, amountIn);
+    }
+
+    function _swapUSDCToAERO(
+        uint256 amountIn
+    ) internal returns (uint256 amountOut) {
+        amountOut = _swap(asset(), AERO, 500, 3000, amountIn);
     }
 
     function totalAssets() public view override returns (uint256) {
