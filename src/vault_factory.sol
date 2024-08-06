@@ -7,19 +7,26 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
-import {IPool} from "./interfaces/IPool.sol";
+import {IPool as IPoolAave} from "./interfaces/IPool.sol";
+import {IPool as IPoolAerodrome} from "./interfaces/IPoolAerodrome.sol";
 import {IPoolDataProvider} from "./interfaces/IPoolDataProvider.sol";
 import {IPyth} from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
 import {PythStructs} from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
+import {TransferHelper} from "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 
 contract VaultStrategy is ERC4626, Ownable {
     using Math for uint256;
     using SafeERC20 for IERC20;
     IPyth pyth;
-    IPool aavePool;
+    IPoolAave aavePool;
     IPoolDataProvider aaveProtocolDataProvider;
+    IPoolAerodrome aerodromePool;
 
+    address public constant swapRouter =
+        0x2626664c2603336E57B271c5C0b26F421741e481;
     address public constant cbETH = 0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22;
+    address public constant AERO = 0x940181a94A35A4569E4529A3CDfB74e38FD98631;
+    address public constant WETH9 = 0x4200000000000000000000000000000000000006;
 
     constructor(
         IERC20 asset_,
@@ -29,7 +36,8 @@ contract VaultStrategy is ERC4626, Ownable {
         string memory symbol_,
         address pythContract,
         address aavePoolContract,
-        address aaveProtocolDataProviderContract
+        address aaveProtocolDataProviderContract,
+        address aerodromePoolContract
     )
         // address _cometAddress
         ERC4626(asset_)
@@ -38,10 +46,11 @@ contract VaultStrategy is ERC4626, Ownable {
     {
         asset_.safeTransferFrom(msg.sender, address(this), _initialDeposit);
         pyth = IPyth(pythContract);
-        aavePool = IPool(aavePoolContract);
+        aavePool = IPoolAave(aavePoolContract);
         aaveProtocolDataProvider = IPoolDataProvider(
             aaveProtocolDataProviderContract
         );
+        aerodromePool = IPoolAerodrome(aerodromePoolContract);
         // commetAddress = _cometAddress;
     }
 
@@ -168,6 +177,61 @@ contract VaultStrategy is ERC4626, Ownable {
         uint256 safeAmount = (cbEthAbleToBorrow * 95) / 100;
         aavePool.borrow(cbETH, safeAmount, 2, 0, address(this));
         uint256 cbEthBalance = IERC20(cbETH).balanceOf(address(this));
+        (uint usdcReceived, uint aeroReceived) = _swapcbETHToUSDCAndAERO(
+            cbEthBalance
+        );
+        IERC20(asset()).safeTransfer(address(aerodromePool), usdcReceived);
+        IERC20(AERO).safeTransfer(address(aerodromePool), aeroReceived);
+        aerodromePool.mint(address(this));
+        aerodromePool.skim(address(this));
+    }
+
+    function _swapcbETHToUSDCAndAERO(
+        uint256 amountIn
+    ) internal returns (uint256 amountOutUSDC, uint256 amountOutAERO) {
+        address assetAddress = asset();
+        // Approve the swapRouter to spend amountIn of cbETH
+        TransferHelper.safeApprove(cbETH, swapRouter, amountIn / 2);
+
+        // Encode the path for the swap
+        bytes memory path = abi.encodePacked(
+            cbETH,
+            uint24(500), // 0.05% fee for cbETH -> ETH
+            WETH9,
+            uint24(3000), // 0.3% fee for ETH -> AERO
+            AERO
+        );
+        // Encode the parameters for exactInput
+        bytes memory data = abi.encodeWithSignature(
+            "exactInput((bytes,address,uint256,uint256))",
+            abi.encode(path, address(this), amountIn / 2, 0)
+        );
+        // Perform the low-level call to the swapRouter
+        (bool success, bytes memory result) = swapRouter.call(data);
+        require(success, "Swap failed");
+        // Decode the result to get the amountOut
+        amountOutAERO = abi.decode(result, (uint256));
+
+        uint256 remainingcbETH = IERC20(cbETH).balanceOf(address(this));
+
+        bytes memory path2 = abi.encodePacked(
+            cbETH,
+            uint24(500), // 0.05% fee for cbETH -> ETH
+            WETH9,
+            uint24(500), // 0.05% fee for ETH -> USDC
+            assetAddress
+        );
+
+        bytes memory data2 = abi.encodeWithSignature(
+            "exactInput((bytes,address,uint256,uint256))",
+            abi.encode(path2, address(this), remainingcbETH, 0)
+        );
+
+        (bool success2, bytes memory result2) = swapRouter.call(data2);
+        require(success2, "Swap failed");
+        amountOutUSDC = abi.decode(result2, (uint256));
+
+        return (amountOutUSDC, amountOutAERO);
     }
 
     function getPricePyth(
