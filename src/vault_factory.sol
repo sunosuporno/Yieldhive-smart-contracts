@@ -31,6 +31,12 @@ contract VaultStrategy is ERC4626, Ownable {
     address public constant variableDebtCbETH =
         0x1DabC36f19909425f654777249815c073E8Fd79F;
     uint256 public _totalAccountedAssets;
+    bytes32 public constant usdcUsdPriceFeedId =
+        0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a;
+    bytes32 public constant cbEthUsdPriceFeedId =
+        0x15ecddd26d49e1a8f1de9376ebebc03916ede873447c1255d2d5891b92ce5717;
+    bytes32 public constant aeroUsdPriceFeedId =
+        0x9db37f4d5654aad3e37e2e14ffd8d53265fb3026d1d8f91146539eebaa2ef45f;
 
     constructor(
         IERC20 asset_,
@@ -58,80 +64,13 @@ contract VaultStrategy is ERC4626, Ownable {
         // commetAddress = _cometAddress;
     }
 
-    // Make the original functions private and override them
-    // Override the original functions to revert
-    function deposit(
-        uint256 assets,
-        address receiver
-    ) public virtual override returns (uint256) {
-        revert("Use deposit with priceUpdate instead");
-    }
-
-    function mint(
-        uint256 shares,
-        address receiver
-    ) public virtual override returns (uint256) {
-        revert("Use mint with priceUpdate instead");
-    }
-
-    // New public functions with the priceUpdate parameter
-    function depositWithPriceUpdate(
-        uint256 assets,
-        address receiver,
-        bytes[] calldata priceUpdate,
-        bytes32[] calldata priceFeedId
-    ) public virtual returns (uint256) {
-        uint256 maxAssets = maxDeposit(receiver);
-        if (assets > maxAssets) {
-            revert ERC4626ExceededMaxDeposit(receiver, assets, maxAssets);
-        }
-
-        uint256 shares = previewDeposit(assets);
-        _depositWithPriceUpdate(
-            _msgSender(),
-            receiver,
-            assets,
-            shares,
-            priceUpdate,
-            priceFeedId
-        );
-
-        return shares;
-    }
-
-    function mintWithPriceUpdate(
-        uint256 shares,
-        address receiver,
-        bytes[] calldata priceUpdate,
-        bytes32[] calldata priceFeedId
-    ) public virtual returns (uint256) {
-        uint256 maxShares = maxMint(receiver);
-        if (shares > maxShares) {
-            revert ERC4626ExceededMaxMint(receiver, shares, maxShares);
-        }
-
-        uint256 assets = previewMint(shares);
-        _depositWithPriceUpdate(
-            _msgSender(),
-            receiver,
-            assets,
-            shares,
-            priceUpdate,
-            priceFeedId
-        );
-
-        return assets;
-    }
-
     // New internal function that includes priceUpdate
-    function _depositWithPriceUpdate(
+    function _deposit(
         address caller,
         address receiver,
         uint256 assets,
-        uint256 shares,
-        bytes[] calldata priceUpdate,
-        bytes32[] calldata priceFeedId
-    ) internal virtual {
+        uint256 shares
+    ) internal override {
         address assetAddress = asset();
         // Transfer the assets from the caller to this contract
         SafeERC20.safeTransferFrom(
@@ -145,20 +84,15 @@ contract VaultStrategy is ERC4626, Ownable {
         _mint(receiver, shares);
 
         // Call the internal function to invest the funds
-        _investFunds(assets, assetAddress, priceUpdate, priceFeedId);
+        _investFunds(assets, assetAddress);
 
         emit Deposit(caller, receiver, assets, shares);
     }
 
-    function _investFunds(
-        uint256 amount,
-        address assetAddress,
-        bytes[] calldata priceUpdate,
-        bytes32[] calldata priceFeedId
-    ) internal {
+    function _investFunds(uint256 amount, address assetAddress) internal {
         // Get the price of the assets in USD from Pyth Network
-        int64 usdcPriceInUSD = getPricePyth(priceUpdate, priceFeedId[0]).price;
-        int64 cbEthPriceInUSD = getPricePyth(priceUpdate, priceFeedId[1]).price;
+        int64 usdcPriceInUSD = getPricePyth(usdcUsdPriceFeedId).price;
+        int64 cbEthPriceInUSD = getPricePyth(cbEthUsdPriceFeedId).price;
         // approve and supply the asset USDC to the Aave pool
         IERC20(assetAddress).approve(address(aavePool), amount);
         aavePool.supply(assetAddress, amount, address(this), 0);
@@ -190,27 +124,11 @@ contract VaultStrategy is ERC4626, Ownable {
         aerodromePool.skim(address(this));
     }
 
-    function _swapcbETHToUSDCAndAERO(
-        uint256 amountIn
-    ) internal returns (uint256 amountOutUSDC, uint256 amountOutAERO) {
-        address assetAddress = asset();
-        // Swap half of cbETH to AERO
-        amountOutAERO = _swap(cbETH, AERO, 500, 3000, amountIn / 2);
-
-        // Swap the other half of cbETH to USDC
-        amountOutUSDC = _swap(cbETH, assetAddress, 500, 500, amountIn / 2);
-
-        return (amountOutUSDC, amountOutAERO);
-    }
-
-    function _harvestReinvestAndReport(
-        bytes[] calldata priceUpdate,
-        bytes32 priceFeedId
-    ) internal {
+    function _harvestReinvestAndReport() internal {
         //Get prices from Pyth Network
-        int64 cbETHPrice = getPricePyth(priceUpdate, priceFeedId[0]).price;
-        int64 usdcPrice = getPricePyth(priceUpdate, priceFeedId[1]).price;
-        int64 aeroPriceInUSD = getPricePyth(priceUpdate, priceFeedId[2]).price;
+        int64 cbETHPrice = getPricePyth(cbEthUsdPriceFeedId).price;
+        int64 usdcPrice = getPricePyth(usdcUsdPriceFeedId).price;
+        int64 aeroPriceInUSD = getPricePyth(aeroUsdPriceFeedId).price;
 
         // Calculate net gains/loss in Aave
 
@@ -328,6 +246,19 @@ contract VaultStrategy is ERC4626, Ownable {
         amountOut = abi.decode(result, (uint256));
     }
 
+    function _swapcbETHToUSDCAndAERO(
+        uint256 amountIn
+    ) internal returns (uint256 amountOutUSDC, uint256 amountOutAERO) {
+        address assetAddress = asset();
+        // Swap half of cbETH to AERO
+        amountOutAERO = _swap(cbETH, AERO, 500, 3000, amountIn / 2);
+
+        // Swap the other half of cbETH to USDC
+        amountOutUSDC = _swap(cbETH, assetAddress, 500, 500, amountIn / 2);
+
+        return (amountOutUSDC, amountOutAERO);
+    }
+
     function _swapAEROToUSDC(
         uint256 amountIn
     ) internal returns (uint256 amountOut) {
@@ -345,12 +276,8 @@ contract VaultStrategy is ERC4626, Ownable {
     }
 
     function getPricePyth(
-        bytes[] calldata priceUpdate,
         bytes32 priceFeedId
-    ) public payable returns (PythStructs.Price memory) {
-        uint fee = pyth.getUpdateFee(priceUpdate);
-        pyth.updatePriceFeeds{value: fee}(priceUpdate);
-
+    ) public view returns (PythStructs.Price memory) {
         PythStructs.Price memory price = pyth.getPrice(priceFeedId);
         return price;
     }
