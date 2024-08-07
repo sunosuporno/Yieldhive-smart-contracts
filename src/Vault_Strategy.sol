@@ -48,12 +48,7 @@ contract VaultStrategy is ERC4626, Ownable {
         address aavePoolContract,
         address aaveProtocolDataProviderContract,
         address aerodromePoolContract
-    )
-        // address _cometAddress
-        ERC4626(asset_)
-        ERC20(name_, symbol_)
-        Ownable(initialOwner)
-    {
+    ) ERC4626(asset_) ERC20(name_, symbol_) Ownable(initialOwner) {
         asset_.safeTransferFrom(msg.sender, address(this), _initialDeposit);
         pyth = IPyth(pythContract);
         aavePool = IPoolAave(aavePoolContract);
@@ -61,7 +56,6 @@ contract VaultStrategy is ERC4626, Ownable {
             aaveProtocolDataProviderContract
         );
         aerodromePool = IPoolAerodrome(aerodromePoolContract);
-        // commetAddress = _cometAddress;
     }
 
     // New internal function that includes priceUpdate
@@ -87,6 +81,29 @@ contract VaultStrategy is ERC4626, Ownable {
         _investFunds(assets, assetAddress);
 
         emit Deposit(caller, receiver, assets, shares);
+    }
+
+    function _withdraw(
+        address caller,
+        address receiver,
+        address owner,
+        uint256 assets,
+        uint256 shares
+    ) internal override {
+        if (caller != owner) {
+            _spendAllowance(owner, caller, shares);
+        }
+
+        // Burn shares from owner
+        _burn(owner, shares);
+
+        // Withdraw funds
+        _withdrawFunds(assets);
+
+        // Transfer assets to receiver
+        SafeERC20.safeTransfer(IERC20(asset()), receiver, assets);
+
+        emit Withdraw(caller, receiver, owner, assets, shares);
     }
 
     function _investFunds(uint256 amount, address assetAddress) internal {
@@ -124,100 +141,146 @@ contract VaultStrategy is ERC4626, Ownable {
         aerodromePool.skim(address(this));
     }
 
+    function _withdrawFunds(uint256 amount) internal {
+        // 1. Calculate the proportion of LP tokens to burn
+        uint256 totalLPBalance = IERC20(address(aerodromePool)).balanceOf(
+            address(this)
+        );
+        uint256 lpTokensToBurn = (amount * totalLPBalance) /
+            _totalAccountedAssets;
+
+        // 2. Transfer LP tokens to this contract
+        IERC20(address(aerodromePool)).transfer(address(this), lpTokensToBurn);
+
+        // 3. Burn LP tokens
+        (uint256 usdc, uint256 aero) = aerodromePool.burn(address(this));
+
+        // 4. Swap AERO to USDC if necessary
+        if (aero > 0) {
+            usdc += _swapAEROToUSDC(aero);
+        }
+
+        // 5. Repay cbETH debt on Aave if necessary
+        uint256 cbEthDebt = IERC20(variableDebtCbETH).balanceOf(address(this));
+        if (cbEthDebt > 0) {
+            uint256 cbEthToRepay = (amount * cbEthDebt) / _totalAccountedAssets;
+            uint256 usdcForCbEth = _swapUSDCToCbETH(cbEthToRepay);
+            IERC20(cbETH).approve(address(aavePool), cbEthToRepay);
+            aavePool.repay(cbETH, cbEthToRepay, 2, address(this));
+            usdc -= usdcForCbEth;
+        }
+
+        // 6. Withdraw USDC from Aave if necessary
+        uint256 usdcBalance = IERC20(asset()).balanceOf(address(this));
+        if (usdcBalance + usdc < amount) {
+            uint256 aUSDCBalance = IERC20(aUSDC).balanceOf(address(this));
+            uint256 usdcToWithdraw = amount - (usdcBalance + usdc);
+            if (usdcToWithdraw > aUSDCBalance) {
+                usdcToWithdraw = aUSDCBalance;
+            }
+            aavePool.withdraw(asset(), usdcToWithdraw, address(this));
+            usdc += usdcToWithdraw;
+        }
+
+        // 7. Ensure we have enough USDC to cover the withdrawal
+        require(usdcBalance + usdc >= amount, "Insufficient USDC balance");
+
+        // 8. Update total accounted assets
+        _totalAccountedAssets -= amount;
+
+        // Transfer the withdrawn amount to the user
+        IERC20(asset()).transfer(msg.sender, amount);
+    }
+
+    function _calculateLPTokensToWithdraw(
+        uint256 amount
+    ) internal view returns (uint256) {
+        uint256 totalLPBalance = IERC20(address(aerodromePool)).balanceOf(
+            address(this)
+        );
+        return (amount * totalLPBalance) / _totalAccountedAssets;
+    }
+
+    function _swapUSDCToCbETH(uint256 cbEthAmount) internal returns (uint256) {
+        int64 cbEthPrice = getPricePyth(cbEthUsdPriceFeedId).price;
+        int64 usdcPrice = getPricePyth(usdcUsdPriceFeedId).price;
+        uint256 usdcAmount = (uint64(cbEthPrice) * cbEthAmount * 10 ** 12) /
+            uint64(usdcPrice);
+        return _swap(asset(), cbETH, 500, 500, usdcAmount);
+    }
+
     function _harvestReinvestAndReport() internal {
-        //Get prices from Pyth Network
+        // Get prices from Pyth Network
         int64 cbETHPrice = getPricePyth(cbEthUsdPriceFeedId).price;
         int64 usdcPrice = getPricePyth(usdcUsdPriceFeedId).price;
         int64 aeroPriceInUSD = getPricePyth(aeroUsdPriceFeedId).price;
 
         // Calculate net gains/loss in Aave
-
-        // uint256 normalizedIncome = aavePool.getReserveNormalizedIncome(asset());
-
-        // Calculate the value of USDC supplied plus the interest accrued
         uint256 aUSDCBalance = IERC20(aUSDC).balanceOf(address(this));
-        uint256 suppliedUSDCValue = aUSDCBalance;
-
-        // uint256 normalizedVariableDebt = aavePool
-        //     .getReserveNormalizedVariableDebt(cbETH);
-
-        // Calculate the value of cbETH borrowed plus the interest owed
         uint256 variableDebtBalance = IERC20(variableDebtCbETH).balanceOf(
             address(this)
         );
-        uint256 cbETHDebtValue = variableDebtBalance;
-        // Calculate the value of cbETH borrowed in USDC token
-        uint256 cbETHAmountInUSDC = (uint64(cbETHPrice) * cbETHDebtValue) /
-            (uint64(usdcPrice) * 10 ** 12);
 
-        // claim rewards and reInvest from Aerodrome Pool
+        uint256 suppliedUSDCValue = aUSDCBalance;
+        uint256 borrowedCbETHValueInUSDC = (uint64(cbETHPrice) *
+            variableDebtBalance) / (uint64(usdcPrice) * 10 ** 12);
 
-        //claim fees from Aerodrome Pool
+        int256 aaveNetGain = int256(suppliedUSDCValue) -
+            int256(borrowedCbETHValueInUSDC);
+
+        // Get initial balances
+        uint256 initialAeroBalance = IERC20(AERO).balanceOf(address(this));
+        uint256 initialUsdcBalance = IERC20(asset()).balanceOf(address(this));
+
+        // Claim fees from Aerodrome Pool
         aerodromePool.claimFees();
-        uint256 aeroBalance = IERC20(AERO).balanceOf(address(this));
-        uint256 usdcBalance = IERC20(asset()).balanceOf(address(this));
-        // Get AERO and USDC balance in USD to see which one is more in value
-        uint256 aeroAmountInUsd = ((uint64(aeroPriceInUSD) * aeroBalance) /
-            10) ^ 12;
-        uint256 usdcAmountInUsd = (uint64(usdcPrice) * usdcBalance);
-        uint256 aeroAmountToReInvest;
-        uint256 usdcAmountToReInvest;
 
-        // Swap AERO to USDC if AERO is more in value or vice versa
-        if (aeroAmountInUsd > usdcAmountInUsd) {
-            uint256 aeroToSwap = ((aeroAmountInUsd - usdcAmountInUsd) *
-                10 ** 12) / (uint64(aeroPriceInUSD) * 2);
-            aeroAmountToReInvest = _swapAEROToUSDC(aeroToSwap);
-        } else if (aeroAmountInUsd < usdcAmountInUsd) {
-            uint256 usdcToSwap = (usdcAmountInUsd - aeroAmountInUsd) /
-                (uint64(usdcPrice) * 2);
-            usdcAmountToReInvest = _swapUSDCToAERO(usdcToSwap);
+        uint256 currentAeroBalance = IERC20(AERO).balanceOf(address(this));
+        uint256 currentUSDCBalance = IERC20(asset()).balanceOf(address(this));
+
+        // Calculate claimed rewards
+        uint256 claimedAero = currentAeroBalance - initialAeroBalance;
+        uint256 claimedUsdc = currentUSDCBalance - initialUsdcBalance;
+
+        if (currentAeroBalance > 0) {
+            currentUSDCBalance += _swapAEROToUSDC(currentAeroBalance);
         }
 
-        // Reinvest the AERO and USDC in Aerodrome Pool
-        IERC20(AERO).safeTransfer(address(aerodromePool), aeroAmountToReInvest);
-        IERC20(asset()).safeTransfer(
-            address(aerodromePool),
-            usdcAmountToReInvest
-        );
-        aerodromePool.mint(address(this));
+        // Reinvest in Aerodrome Pool
+        if (currentUSDCBalance > 0) {
+            uint256 halfUSDC = currentUSDCBalance / 2;
+            uint256 aeroAmount = _swapUSDCToAERO(halfUSDC);
+
+            IERC20(AERO).safeTransfer(address(aerodromePool), aeroAmount);
+            IERC20(asset()).safeTransfer(address(aerodromePool), halfUSDC);
+            aerodromePool.mint(address(this));
+        }
 
         // Skim any excess assets from Aerodrome Pool
         aerodromePool.skim(address(this));
 
-        // Check if skimmed results in AERO or USDC (if there is any)
-        uint256 usdcBalanceAfterHarvest;
-        if (IERC20(AERO).balanceOf(address(this)) > 0) {
-            usdcBalanceAfterHarvest = _swapAEROToUSDC(
-                IERC20(AERO).balanceOf(address(this))
-            );
-        } else if (IERC20(asset()).balanceOf(address(this)) > 0) {
-            usdcBalanceAfterHarvest = IERC20(asset()).balanceOf(address(this));
+        // Calculate total rewards in USDC
+        uint256 finalAeroBalance = IERC20(AERO).balanceOf(address(this));
+        uint256 finalUsdcBalance = IERC20(asset()).balanceOf(address(this));
+        uint256 totalRewardsInUSDC = (finalUsdcBalance - initialUsdcBalance) +
+            ((uint64(aeroPriceInUSD) *
+                (finalAeroBalance - initialAeroBalance)) /
+                (uint64(usdcPrice) * 10 ** 12));
+
+        // Update total accounted assets
+        if (aaveNetGain > 0) {
+            _totalAccountedAssets += uint256(aaveNetGain);
+        } else {
+            _totalAccountedAssets -= uint256(-aaveNetGain);
         }
+        _totalAccountedAssets += totalRewardsInUSDC;
 
-        // Calculate net gains/loss in Aerodrome
-        uint256 myLPBalance = IERC20(address(aerodromePool)).balanceOf(
-            address(this)
+        emit HarvestReport(
+            totalRewardsInUSDC,
+            aaveNetGain,
+            claimedAero,
+            claimedUsdc
         );
-        uint256 totalLPSupply = IERC20(address(aerodromePool)).totalSupply();
-        (uint256 reserve0, uint256 reserve1, ) = aerodromePool.getReserves();
-
-        // Get current amount value of invested assets
-        uint256 myUSDCAmount = (reserve0 * myLPBalance) / totalLPSupply;
-        uint256 myAEROAmount = (reserve1 * myLPBalance) / totalLPSupply;
-
-        // Get AERO and USDC balance in USD
-        uint256 aeroAmountInUSDC = (uint64(aeroPriceInUSD) * myAEROAmount) /
-            (uint64(usdcPrice) * 10 ** 12);
-
-        // Final check to see if any USDC is left in the contract
-
-        _totalAccountedAssets =
-            suppliedUSDCValue +
-            cbETHAmountInUSDC +
-            usdcBalanceAfterHarvest +
-            myUSDCAmount +
-            aeroAmountInUSDC;
     }
 
     function _swap(
@@ -281,4 +344,11 @@ contract VaultStrategy is ERC4626, Ownable {
         PythStructs.Price memory price = pyth.getPrice(priceFeedId);
         return price;
     }
+
+    event HarvestReport(
+        uint256 totalRewardsInUSDC,
+        int256 aaveNetGain,
+        uint256 claimedAero,
+        uint256 claimedUsdc
+    );
 }
