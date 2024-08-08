@@ -38,6 +38,10 @@ contract VaultStrategy is ERC4626, Ownable {
     bytes32 public constant aeroUsdPriceFeedId =
         0x9db37f4d5654aad3e37e2e14ffd8d53265fb3026d1d8f91146539eebaa2ef45f;
 
+    // Add new state variables to keep track of the previous balances
+    uint256 public previousAUSDCBalance;
+    uint256 public previousVariableDebtBalance;
+
     constructor(
         IERC20 asset_,
         uint256 _initialDeposit,
@@ -220,18 +224,28 @@ contract VaultStrategy is ERC4626, Ownable {
         uint64 usdcPrice = uint64(getPricePyth(usdcUsdPriceFeedId).price);
         uint64 aeroPriceInUSD = uint64(getPricePyth(aeroUsdPriceFeedId).price);
 
-        // Calculate net gains/loss in Aave
-        uint256 aUSDCBalance = IERC20(aUSDC).balanceOf(address(this));
-        uint256 variableDebtBalance = IERC20(variableDebtCbETH).balanceOf(
-            address(this)
-        );
+        // Get current balances
+        uint256 currentAUSDCBalance = IERC20(aUSDC).balanceOf(address(this));
+        uint256 currentVariableDebtBalance = IERC20(variableDebtCbETH)
+            .balanceOf(address(this));
 
-        uint256 suppliedUSDCValue = aUSDCBalance;
-        uint256 borrowedCbETHValueInUSDC = (cbETHPrice * variableDebtBalance) /
-            (usdcPrice * 10 ** 12);
+        // Calculate the change in balances
 
-        int256 aaveNetGain = int256(suppliedUSDCValue) -
-            int256(borrowedCbETHValueInUSDC);
+        uint256 borrowedCbETHChange = currentVariableDebtBalance -
+            previousVariableDebtBalance;
+
+        // Calculate the net gain in Aave
+        uint256 suppliedUSDCValueChange = currentAUSDCBalance -
+            previousAUSDCBalance;
+        uint256 borrowedCbETHValueChangeInUSDC = (cbETHPrice *
+            borrowedCbETHChange) / (usdcPrice * 10 ** 12);
+
+        int256 aaveNetGain = int256(suppliedUSDCValueChange) -
+            int256(borrowedCbETHValueChangeInUSDC);
+
+        // Update the previous balances
+        previousAUSDCBalance = currentAUSDCBalance;
+        previousVariableDebtBalance = currentVariableDebtBalance;
 
         // Get initial balances
         uint256 initialAeroBalance = IERC20(AERO).balanceOf(address(this));
