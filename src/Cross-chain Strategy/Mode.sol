@@ -34,12 +34,22 @@ contract BaseStrategy is ERC4626, Ownable {
         uint256 fees // The fees paid for sending the CCIP message.
     );
 
-    IRouterClient private router;
-    IERC20 private linkToken;
+    IRouterClient private immutable i_router;
+    IERC20 private immutable i_linkToken;
+
+    // Mapping to keep track of the receiver contract per destination chain.
+    mapping(uint64 => address) public s_receivers;
+    // Mapping to store the gas limit per destination chain.
+    mapping(uint64 => uint256) public s_gasLimits;
 
     /// @notice Constructor initializes the contract with the router address.
     /// @param _router The address of the router contract.
     /// @param _link The address of the link contract.
+    /// @param _initialDeposit The initial deposit of assets.
+    /// @param _asset The address of the asset token.
+    /// @param initialOwner The address of the initial owner.
+    /// @param name_ The name of the token.
+    /// @param symbol_ The symbol of the token.
     constructor(
         IERC20 asset_,
         address _router,
@@ -51,8 +61,8 @@ contract BaseStrategy is ERC4626, Ownable {
         string memory symbol_
     ) ERC4626(asset_) ERC20(name_, symbol_) Ownable(initialOwner) {
         asset_.safeTransferFrom(msg.sender, address(this), _initialDeposit);
-        router = IRouterClient(_router);
-        linkToken = IERC20(_link);
+        i_router = IRouterClient(_router);
+        i_linkToken = IERC20(_link);
     }
 
     function _deposit(
@@ -79,5 +89,86 @@ contract BaseStrategy is ERC4626, Ownable {
         emit Deposit(caller, receiver, assets, shares);
     }
 
-    function _investFunds(uint256 assets, address assetAddress) internal {}
+    function _investFunds(
+        uint256 assets,
+        address assetAddress
+    ) internal override {
+        uint64 destinationChainSelector = 111; // Replace with actual Optimism chain selector
+        address receiver = s_receivers[destinationChainSelector];
+        require(
+            receiver != address(0),
+            "Receiver not set for destination chain"
+        );
+
+        uint256 gasLimit = s_gasLimits[destinationChainSelector];
+        require(gasLimit != 0, "Gas limit not set for destination chain");
+
+        Client.EVMTokenAmount[]
+            memory tokenAmounts = new Client.EVMTokenAmount[](1);
+        tokenAmounts[0] = Client.EVMTokenAmount({
+            token: assetAddress,
+            amount: assets
+        });
+
+        // Encode the function call for the receiving contract
+        bytes memory encodedFunction = abi.encodeWithSignature(
+            "investInAave(address,uint256)",
+            assetAddress,
+            assets
+        );
+
+        Client.EVM2AnyMessage memory evm2AnyMessage = Client.EVM2AnyMessage({
+            receiver: abi.encode(receiver),
+            data: encodedFunction,
+            tokenAmounts: tokenAmounts,
+            extraArgs: Client._argsToBytes(
+                Client.EVMExtraArgsV1({gasLimit: gasLimit})
+            ),
+            feeToken: address(i_linkToken)
+        });
+
+        uint256 fees = i_router.getFee(
+            destinationChainSelector,
+            evm2AnyMessage
+        );
+        require(
+            i_linkToken.balanceOf(address(this)) >= fees,
+            "Not enough LINK for fees"
+        );
+
+        i_linkToken.approve(address(i_router), fees);
+        IERC20(assetAddress).approve(address(i_router), assets);
+
+        bytes32 messageId = i_router.ccipSend(
+            destinationChainSelector,
+            evm2AnyMessage
+        );
+
+        emit MessageSent(
+            messageId,
+            destinationChainSelector,
+            receiver,
+            assetAddress,
+            assets,
+            address(i_linkToken),
+            fees
+        );
+    }
+
+    // Add functions to set receiver and gas limit for destination chains
+    function setReceiverForDestinationChain(
+        uint64 _destinationChainSelector,
+        address _receiver
+    ) external onlyOwner {
+        require(_receiver != address(0), "Invalid receiver address");
+        s_receivers[_destinationChainSelector] = _receiver;
+    }
+
+    function setGasLimitForDestinationChain(
+        uint64 _destinationChainSelector,
+        uint256 _gasLimit
+    ) external onlyOwner {
+        require(_gasLimit > 0, "Invalid gas limit");
+        s_gasLimits[_destinationChainSelector] = _gasLimit;
+    }
 }
