@@ -86,16 +86,16 @@ contract VaultStrategy is ERC4626, Ownable {
     function _withdraw(
         address caller,
         address receiver,
-        address owner,
+        address _owner,
         uint256 assets,
         uint256 shares
     ) internal override {
-        if (caller != owner) {
-            _spendAllowance(owner, caller, shares);
+        if (caller != _owner) {
+            _spendAllowance(_owner, caller, shares);
         }
 
-        // Burn shares from owner
-        _burn(owner, shares);
+        // Burn shares from _owner
+        _burn(_owner, shares);
 
         // Withdraw funds
         _withdrawFunds(assets);
@@ -103,13 +103,15 @@ contract VaultStrategy is ERC4626, Ownable {
         // Transfer assets to receiver
         SafeERC20.safeTransfer(IERC20(asset()), receiver, assets);
 
-        emit Withdraw(caller, receiver, owner, assets, shares);
+        emit Withdraw(caller, receiver, _owner, assets, shares);
     }
 
     function _investFunds(uint256 amount, address assetAddress) internal {
         // Get the price of the assets in USD from Pyth Network
-        int64 usdcPriceInUSD = getPricePyth(usdcUsdPriceFeedId).price;
-        int64 cbEthPriceInUSD = getPricePyth(cbEthUsdPriceFeedId).price;
+        uint64 usdcPriceInUSD = uint64(getPricePyth(usdcUsdPriceFeedId).price);
+        uint64 cbEthPriceInUSD = uint64(
+            getPricePyth(cbEthUsdPriceFeedId).price
+        );
         // approve and supply the asset USDC to the Aave pool
         IERC20(assetAddress).approve(address(aavePool), amount);
         aavePool.supply(assetAddress, amount, address(this), 0);
@@ -118,7 +120,7 @@ contract VaultStrategy is ERC4626, Ownable {
         uint256 usdcAmountIn18Decimals = amount * 10 ** 12;
         // Finding total price of the asset supplied in USD
         uint256 usdcAmountIn18DecimalsInUSD = (usdcAmountIn18Decimals *
-            (uint64(usdcPriceInUSD))) / 10 ** 8;
+            (usdcPriceInUSD)) / 10 ** 8;
         // Fetching LTV of USDC from Aave
         (, uint256 ltv, , , , , , , , ) = aaveProtocolDataProvider
             .getReserveConfigurationData(assetAddress);
@@ -127,7 +129,7 @@ contract VaultStrategy is ERC4626, Ownable {
             ltv) / 10 ** 5;
         // Calculating the maximum amount of cbETH that can be borrowed
         uint256 cbEthAbleToBorrow = (maxLoanAmountIn18DecimalsInUSD * 10 ** 8) /
-            uint64(cbEthPriceInUSD);
+            cbEthPriceInUSD;
         // Borrowing cbETH after calculating a safe amount
         uint256 safeAmount = (cbEthAbleToBorrow * 95) / 100;
         aavePool.borrow(cbETH, safeAmount, 2, 0, address(this));
@@ -139,6 +141,9 @@ contract VaultStrategy is ERC4626, Ownable {
         IERC20(AERO).safeTransfer(address(aerodromePool), aeroReceived);
         aerodromePool.mint(address(this));
         aerodromePool.skim(address(this));
+
+        // Add accounting for _totalAccountedAssets
+        _totalAccountedAssets += amount;
     }
 
     function _withdrawFunds(uint256 amount) internal {
@@ -209,11 +214,11 @@ contract VaultStrategy is ERC4626, Ownable {
         return _swap(asset(), cbETH, 500, 500, usdcAmount);
     }
 
-    function _harvestReinvestAndReport() internal {
+    function harvestReinvestAndReport() external onlyOwner {
         // Get prices from Pyth Network
-        int64 cbETHPrice = getPricePyth(cbEthUsdPriceFeedId).price;
-        int64 usdcPrice = getPricePyth(usdcUsdPriceFeedId).price;
-        int64 aeroPriceInUSD = getPricePyth(aeroUsdPriceFeedId).price;
+        uint64 cbETHPrice = uint64(getPricePyth(cbEthUsdPriceFeedId).price);
+        uint64 usdcPrice = uint64(getPricePyth(usdcUsdPriceFeedId).price);
+        uint64 aeroPriceInUSD = uint64(getPricePyth(aeroUsdPriceFeedId).price);
 
         // Calculate net gains/loss in Aave
         uint256 aUSDCBalance = IERC20(aUSDC).balanceOf(address(this));
@@ -222,8 +227,8 @@ contract VaultStrategy is ERC4626, Ownable {
         );
 
         uint256 suppliedUSDCValue = aUSDCBalance;
-        uint256 borrowedCbETHValueInUSDC = (uint64(cbETHPrice) *
-            variableDebtBalance) / (uint64(usdcPrice) * 10 ** 12);
+        uint256 borrowedCbETHValueInUSDC = (cbETHPrice * variableDebtBalance) /
+            (usdcPrice * 10 ** 12);
 
         int256 aaveNetGain = int256(suppliedUSDCValue) -
             int256(borrowedCbETHValueInUSDC);
@@ -248,11 +253,13 @@ contract VaultStrategy is ERC4626, Ownable {
 
         // Reinvest in Aerodrome Pool
         if (currentUSDCBalance > 0) {
-            uint256 halfUSDC = currentUSDCBalance / 2;
-            uint256 aeroAmount = _swapUSDCToAERO(halfUSDC);
+            uint256 aeroAmount = _swapUSDCToAERO(currentUSDCBalance / 2);
 
             IERC20(AERO).safeTransfer(address(aerodromePool), aeroAmount);
-            IERC20(asset()).safeTransfer(address(aerodromePool), halfUSDC);
+            IERC20(asset()).safeTransfer(
+                address(aerodromePool),
+                currentUSDCBalance / 2
+            );
             aerodromePool.mint(address(this));
         }
 
@@ -263,9 +270,8 @@ contract VaultStrategy is ERC4626, Ownable {
         uint256 finalAeroBalance = IERC20(AERO).balanceOf(address(this));
         uint256 finalUsdcBalance = IERC20(asset()).balanceOf(address(this));
         uint256 totalRewardsInUSDC = (finalUsdcBalance - initialUsdcBalance) +
-            ((uint64(aeroPriceInUSD) *
-                (finalAeroBalance - initialAeroBalance)) /
-                (uint64(usdcPrice) * 10 ** 12));
+            ((aeroPriceInUSD * (finalAeroBalance - initialAeroBalance)) /
+                (usdcPrice * 10 ** 12));
 
         // Update total accounted assets
         if (aaveNetGain > 0) {
