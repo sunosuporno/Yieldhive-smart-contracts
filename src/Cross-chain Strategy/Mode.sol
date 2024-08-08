@@ -4,6 +4,7 @@ pragma solidity ^0.8.26;
 import {IRouterClient} from "@chainlink/contracts-ccip@1.4.0/src/v0.8/ccip/interfaces/IRouterClient.sol";
 import {OwnerIsCreator} from "@chainlink/contracts-ccip@1.4.0/src/v0.8/shared/access/OwnerIsCreator.sol";
 import {Client} from "@chainlink/contracts-ccip@1.4.0/src/v0.8/ccip/libraries/Client.sol";
+import {CCIPReceiver} from "@chainlink/contracts-ccip@1.4.0/src/v0.8/ccip/applications/CCIPReceiver.sol";
 import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
@@ -42,6 +43,12 @@ contract BaseStrategy is ERC4626, Ownable {
     mapping(uint64 => address) public s_receivers;
     // Mapping to store the gas limit per destination chain.
     mapping(uint64 => uint256) public s_gasLimits;
+
+    // Mapping to keep track of the sender contract per source chain.
+    mapping(uint64 => address) public s_senders;
+
+    // The message contents of failed messages are stored here.
+    mapping(bytes32 => Client.Any2EVMMessage) public s_messageContents;
 
     /// @notice Constructor initializes the contract with the router address.
     /// @param _router The address of the router contract.
@@ -93,6 +100,7 @@ contract BaseStrategy is ERC4626, Ownable {
     function _investFunds(uint256 assets, address assetAddress) internal {
         uint64 destinationChainSelector = 111; // Replace with actual Optimism chain selector
         address receiver = s_receivers[destinationChainSelector];
+        require(assets > 0, "Amount must be greater than 0");
         require(
             receiver != address(0),
             "Receiver not set for destination chain"
@@ -110,9 +118,7 @@ contract BaseStrategy is ERC4626, Ownable {
 
         // Encode the function call for the receiving contract
         bytes memory encodedFunction = abi.encodeWithSignature(
-            "investInAave(address,uint256)",
-            assetAddress,
-            assets
+            "_investFunds()"
         );
 
         Client.EVM2AnyMessage memory evm2AnyMessage = Client.EVM2AnyMessage({
