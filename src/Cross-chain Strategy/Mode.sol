@@ -29,7 +29,8 @@ contract BaseStrategy is ERC4626, Ownable {
         bytes32 indexed messageId, // The unique ID of the CCIP message.
         uint64 indexed destinationChainSelector, // The chain selector of the destination chain.
         address receiver, // The address of the receiver on the destination chain.
-        string text, // The text being sent.
+        address asset,
+        uint256 amount,
         address feeToken, // the token address used to pay CCIP fees.
         uint256 fees // The fees paid for sending the CCIP message.
     );
@@ -89,10 +90,7 @@ contract BaseStrategy is ERC4626, Ownable {
         emit Deposit(caller, receiver, assets, shares);
     }
 
-    function _investFunds(
-        uint256 assets,
-        address assetAddress
-    ) internal override {
+    function _investFunds(uint256 assets, address assetAddress) internal {
         uint64 destinationChainSelector = 111; // Replace with actual Optimism chain selector
         address receiver = s_receivers[destinationChainSelector];
         require(
