@@ -12,6 +12,7 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 /**
  * THIS IS AN EXAMPLE CONTRACT THAT USES HARDCODED VALUES FOR CLARITY.
@@ -24,6 +25,8 @@ contract BaseStrategy is ERC4626, Ownable, CCIPReceiver {
     using Math for uint256;
     using SafeERC20 for IERC20;
     using EnumerableMap for EnumerableMap.Bytes32ToUintMap;
+    using EnumerableSet for EnumerableSet.AddressSet;
+
     // Custom errors to provide more descriptive revert messages.
     error NotEnoughBalance(uint256 currentBalance, uint256 calculatedFees); // Used to make sure contract has enough balance.
 
@@ -72,6 +75,35 @@ contract BaseStrategy is ERC4626, Ownable, CCIPReceiver {
         bytes32 messageId;
         ErrorCode errorCode;
     }
+
+    // Struct to represent a withdrawal request
+    struct WithdrawalRequest {
+        address user;
+        uint256 amount;
+        uint256 timestamp;
+    }
+
+    // Queue of withdrawal requests
+    WithdrawalRequest[] public withdrawalQueue;
+
+    // Set to keep track of users with pending withdrawals
+    EnumerableSet.AddressSet private usersWithPendingWithdrawals;
+
+    // Event for new withdrawal requests
+    event WithdrawalRequested(
+        address indexed user,
+        uint256 amount,
+        uint256 timestamp
+    );
+
+    // Event for cross-chain withdrawal initiation
+    event CrossChainWithdrawalInitiated(address indexed user, uint256 amount);
+
+    // Event for cross-chain withdrawal completion
+    event CrossChainWithdrawalCompleted(address indexed user, uint256 amount);
+
+    uint256 public pendingCrossChainWithdrawals;
+    mapping(address => uint256) public userPendingWithdrawals;
 
     /// @notice Constructor initializes the contract with the router address.
     /// @param _router The address of the router contract.
@@ -123,6 +155,75 @@ contract BaseStrategy is ERC4626, Ownable, CCIPReceiver {
         _investFunds(assets, assetAddress);
 
         emit Deposit(caller, receiver, assets, shares);
+    }
+
+    function _withdraw(
+        address caller,
+        address receiver,
+        address owner,
+        uint256 assets,
+        uint256 shares
+    ) internal virtual override {
+        super._withdraw(caller, receiver, owner, assets, shares);
+        _initiateWithdrawal(assets, receiver);
+    }
+
+    function _initiateWithdrawal(uint256 amount, address receiver) internal {
+        uint64 destinationChainSelector = 111; // Replace with actual Optimism chain selector
+        address optimismReceiver = s_receivers[destinationChainSelector];
+        require(
+            optimismReceiver != address(0),
+            "Receiver not set for destination chain"
+        );
+
+        uint256 gasLimit = s_gasLimits[destinationChainSelector];
+        require(gasLimit != 0, "Gas limit not set for destination chain");
+
+        // Encode the function call for the receiving contract
+        bytes memory encodedFunction = abi.encodeWithSignature(
+            "_withdrawFunds(uint256,address)",
+            amount,
+            receiver
+        );
+
+        // Prepare the CCIP message
+        Client.EVM2AnyMessage memory evm2AnyMessage = Client.EVM2AnyMessage({
+            receiver: abi.encode(optimismReceiver),
+            data: encodedFunction,
+            tokenAmounts: new Client.EVMTokenAmount[](0), // No tokens are being sent
+            extraArgs: Client._argsToBytes(
+                Client.EVMExtraArgsV1({gasLimit: gasLimit})
+            ),
+            feeToken: address(i_linkToken)
+        });
+
+        // Calculate and pay the fee
+        uint256 fees = i_router.getFee(
+            destinationChainSelector,
+            evm2AnyMessage
+        );
+        require(
+            i_linkToken.balanceOf(address(this)) >= fees,
+            "Not enough LINK for fees"
+        );
+        i_linkToken.approve(address(i_router), fees);
+
+        // Send the CCIP message
+        bytes32 messageId = i_router.ccipSend(
+            destinationChainSelector,
+            evm2AnyMessage
+        );
+
+        emit CrossChainWithdrawalInitiated(receiver, amount);
+        emit MessageSent(
+            messageId,
+            destinationChainSelector,
+            optimismReceiver,
+            address(0),
+            0,
+            address(i_linkToken),
+            fees
+        );
     }
 
     function _investFunds(uint256 assets, address assetAddress) internal {
@@ -188,7 +289,7 @@ contract BaseStrategy is ERC4626, Ownable, CCIPReceiver {
     }
 
     function totalAssets() public view override returns (uint256) {
-        return _totalAccountedAssets;
+        return _totalAccountedAssets - pendingCrossChainWithdrawals;
     }
 
     // Add functions to set receiver and gas limit for destination chains
@@ -261,11 +362,5 @@ contract BaseStrategy is ERC4626, Ownable, CCIPReceiver {
         } else {
             _totalAccountedAssets -= uint256(-aaveNetGain);
         }
-    }
-
-    function withdrawAll(uint256 amount) internal {
-        // Handle the withdrawal of all assets
-        // This function will be called by ccipReceive when a message is received from Optimism
-        // Implement your logic to handle the withdrawal here
     }
 }

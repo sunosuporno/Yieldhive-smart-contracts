@@ -10,6 +10,8 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {EnumerableMap} from "@openzeppelin/contracts/utils/structs/EnumerableMap.sol";
 import {IPool as IPoolAave} from "../interfaces/IPool.sol";
 import {IPoolDataProvider} from "../interfaces/IPoolDataProvider.sol";
+import {IPyth} from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
+import {PythStructs} from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 import {TransferHelper} from "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 
 contract OptimismStrategy is CCIPReceiver, OwnerIsCreator {
@@ -22,13 +24,17 @@ contract OptimismStrategy is CCIPReceiver, OwnerIsCreator {
     IERC20 public immutable weth;
     IERC20 private immutable i_linkToken;
     IRouterClient private immutable i_router;
+    IPyth pyth;
 
     address public constant swapRouter =
         0xE592427A0AEce92De3Edee1F18E0157C05861564;
     address public constant aUSDC = 0x625E7708f30cA75bfd92586e17077590C60eb4cD;
     address public constant variableDebtWETH =
         0x0c84331e39d6658Cd6e6b9ba04736cC4c4734351;
-
+    bytes32 public constant usdcUsdPriceFeedId =
+        0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a;
+    bytes32 public constant wethUsdPriceFeedId =
+        0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace;
     uint256 private constant PRICE_DENOMINATOR = 1e8;
     uint256 private constant USDC_DECIMALS = 6;
     uint256 private constant WETH_DECIMALS = 18;
@@ -85,12 +91,14 @@ contract OptimismStrategy is CCIPReceiver, OwnerIsCreator {
         address _aavePool,
         address _aaveProtocolDataProvider,
         address _usdc,
-        address _weth
+        address _weth,
+        address pythContract
     ) CCIPReceiver(_router) {
         aavePool = IPoolAave(_aavePool);
         aaveProtocolDataProvider = IPoolDataProvider(_aaveProtocolDataProvider);
         usdc = IERC20(_usdc);
         weth = IERC20(_weth);
+        pyth = IPyth(pythContract);
     }
 
     function setSenderForSourceChain(
@@ -166,27 +174,32 @@ contract OptimismStrategy is CCIPReceiver, OwnerIsCreator {
         uint256 usdcAmount,
         bool shouldBorrow
     ) internal returns (uint256) {
+        uint256 usdcPriceInUSD = getPricePyth(usdcUsdPriceFeedId);
+        uint256 wethPriceInUSD = getPricePyth(wethUsdPriceFeedId);
         // 1. Supply USDC to Aave
         usdc.approve(address(aavePool), usdcAmount);
         aavePool.supply(address(usdc), usdcAmount, address(this), 0);
 
         if (shouldBorrow) {
-            // 2. Calculate borrowing capacity
+            uint256 usdcAmountIn18Decimals = usdcAmount * 10 ** 12;
+            // Finding total price of the asset supplied in USD
+            uint256 usdcAmountIn18DecimalsInUSD = (usdcAmountIn18Decimals *
+                (usdcPriceInUSD)) / 10 ** 8;
+            // Fetching LTV of USDC from Aave
             (, uint256 ltv, , , , , , , , ) = aaveProtocolDataProvider
                 .getReserveConfigurationData(address(usdc));
-            uint256 borrowCapacityUSDC = (usdcAmount * ltv) / 1e4; // LTV is in basis points (1e4)
-
-            // 3. Calculate WETH amount to borrow (95% of capacity)
-            uint256 wethPrice = getWETHPrice();
-            uint256 wethToBorrow = (borrowCapacityUSDC *
-                95 *
-                PRICE_DENOMINATOR) / (100 * wethPrice);
-
-            // 4. Borrow WETH from Aave
-            aavePool.borrow(address(weth), wethToBorrow, 2, 0, address(this));
+            // Calculating the maximum loan amount in USD
+            uint256 maxLoanAmountIn18DecimalsInUSD = (usdcAmountIn18DecimalsInUSD *
+                    ltv) / 10 ** 5;
+            // Calculating the maximum amount of cbETH that can be borrowed
+            uint256 wethAbleToBorrow = (maxLoanAmountIn18DecimalsInUSD *
+                10 ** 8) / wethPriceInUSD;
+            // Borrowing cbETH after calculating a safe amount
+            uint256 safeAmount = (wethAbleToBorrow * 95) / 100;
+            aavePool.borrow(address(weth), safeAmount, 2, 0, address(this));
 
             // 5. Swap WETH for USDC using Uniswap
-            uint256 usdcReceived = _swapWETHToUSDC(wethToBorrow);
+            uint256 usdcReceived = _swapWETHToUSDC(safeAmount);
 
             return usdcReceived;
         }
@@ -213,12 +226,6 @@ contract OptimismStrategy is CCIPReceiver, OwnerIsCreator {
         (bool success, bytes memory result) = swapRouter.call(data);
         require(success, "Swap failed");
         amountOut = abi.decode(result, (uint256));
-    }
-
-    function getWETHPrice() public view returns (uint256) {
-        // In a real-world scenario, you would use an oracle here.
-        // For simplicity, we're using a hardcoded price.
-        return 2000 * PRICE_DENOMINATOR; // Assuming 1 WETH = 2000 USDC
     }
 
     function retryFailedMessage(
@@ -277,8 +284,9 @@ contract OptimismStrategy is CCIPReceiver, OwnerIsCreator {
         // Calculate the net gain in Aave
         uint256 suppliedUSDCValueChange = currentAUSDCBalance -
             previousAUSDCBalance;
-        uint256 borrowedWETHValueChangeInUSDC = (getWETHPrice() *
-            borrowedWETHChange) / (10 ** 18);
+        uint256 borrowedWETHValueChangeInUSDC = (getPricePyth(
+            wethUsdPriceFeedId
+        ) * borrowedWETHChange) / (getPricePyth(usdcUsdPriceFeedId) * 10 ** 12);
 
         int256 aaveNetGain = int256(suppliedUSDCValueChange) -
             int256(borrowedWETHValueChangeInUSDC);
@@ -293,28 +301,48 @@ contract OptimismStrategy is CCIPReceiver, OwnerIsCreator {
         emit HarvestReport(aaveNetGain);
     }
 
-    function withdrawAll() external onlyOwner {
-        // Withdraw all USDC from Aave
+    function withdrawFunds(uint256 amountToWithdraw) external onlyOwner {
+        require(amountToWithdraw > 0, "Amount must be greater than 0");
+
+        uint256 currentUSDCBalance = usdc.balanceOf(address(this));
         uint256 aUSDCBalance = IERC20(aUSDC).balanceOf(address(this));
-        if (aUSDCBalance > 0) {
-            aavePool.withdraw(address(usdc), type(uint256).max, address(this));
-        }
-
-        // Repay all WETH debt
         uint256 wethDebt = IERC20(variableDebtWETH).balanceOf(address(this));
-        if (wethDebt > 0) {
-            weth.approve(address(aavePool), wethDebt);
-            aavePool.repay(address(weth), type(uint256).max, 2, address(this));
-        }
+        uint256 usdcPriceInUSD = getPricePyth(usdcUsdPriceFeedId);
+        uint256 wethPriceInUSD = getPricePyth(wethUsdPriceFeedId);
 
-        // Transfer all USDC to the owner
-        uint256 usdcBalance = usdc.balanceOf(address(this));
-        if (usdcBalance > 0) {
-            usdc.safeTransfer(owner(), usdcBalance);
+        // Calculate how much USDC we need to withdraw from Aave
+
+        (, uint256 ltv, , , , , , , , ) = aaveProtocolDataProvider
+            .getReserveConfigurationData(address(usdc));
+        uint usdcAmountToWithdrawInUSD = (amountToWithdraw *
+            usdcPriceInUSD *
+            10 ** 12) / PRICE_DENOMINATOR;
+
+        //amount of WETH(in $) we can get for amountToWithdraw of USDC(in $)
+        uint wethAmountToRepayInUSD = (usdcAmountToWithdrawInUSD * ltv) / 10000;
+        uint wethAmountToRepay = (wethAmountToRepayInUSD * 10 ** 8) /
+            wethPriceInUSD;
+        // Calculate how much WETH we need to repay
+
+        // Repay WETH debt
+        weth.approve(address(aavePool), wethAmountToRepay);
+        aavePool.repay(address(weth), wethAmountToRepay, 2, address(this));
+
+        // Withdraw USDC from Aave
+
+        aavePool.withdraw(address(usdc), amountToWithdraw, address(this));
+
+        // Transfer USDC to the owner
+        uint256 finalUSDCBalance = usdc.balanceOf(address(this));
+        uint256 amountToTransfer = amountToWithdraw < finalUSDCBalance
+            ? amountToWithdraw
+            : finalUSDCBalance;
+        if (amountToTransfer > 0) {
+            usdc.safeTransfer(owner(), amountToTransfer);
         }
 
         // Send withdrawal information to Mode.sol
-        sendMessageToMode("withdrawAll", usdcBalance, 0);
+        sendMessageToMode("withdrawAll", amountToTransfer, 0);
     }
 
     function sendMessageToMode(
@@ -398,5 +426,10 @@ contract OptimismStrategy is CCIPReceiver, OwnerIsCreator {
             address(i_linkToken),
             fees
         );
+    }
+
+    function getPricePyth(bytes32 priceFeedId) public view returns (uint) {
+        PythStructs.Price memory price = pyth.getPrice(priceFeedId);
+        return uint256(uint64(price.price));
     }
 }
