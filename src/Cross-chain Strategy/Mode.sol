@@ -6,6 +6,7 @@ import {OwnerIsCreator} from "@chainlink/contracts-ccip@1.4.0/src/v0.8/shared/ac
 import {Client} from "@chainlink/contracts-ccip@1.4.0/src/v0.8/ccip/libraries/Client.sol";
 import {CCIPReceiver} from "@chainlink/contracts-ccip@1.4.0/src/v0.8/ccip/applications/CCIPReceiver.sol";
 import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
+import {EnumerableMap} from "@openzeppelin/contracts/utils/structs/EnumerableMap.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -19,9 +20,10 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
  */
 
 /// @title - A simple contract for sending string data across chains.
-contract BaseStrategy is ERC4626, Ownable {
+contract BaseStrategy is ERC4626, Ownable, CCIPReceiver {
     using Math for uint256;
     using SafeERC20 for IERC20;
+    using EnumerableMap for EnumerableMap.Bytes32ToUintMap;
     // Custom errors to provide more descriptive revert messages.
     error NotEnoughBalance(uint256 currentBalance, uint256 calculatedFees); // Used to make sure contract has enough balance.
 
@@ -36,8 +38,18 @@ contract BaseStrategy is ERC4626, Ownable {
         uint256 fees // The fees paid for sending the CCIP message.
     );
 
+    // Add these new events
+    event MessageReceived(
+        bytes32 indexed messageId,
+        uint64 indexed sourceChainSelector,
+        address indexed sender,
+        uint256 value
+    );
+    event MessageFailed(bytes32 indexed messageId, bytes reason);
+
     IRouterClient private immutable i_router;
     IERC20 private immutable i_linkToken;
+    uint256 public _totalAccountedAssets;
 
     // Mapping to keep track of the receiver contract per destination chain.
     mapping(uint64 => address) public s_receivers;
@@ -49,6 +61,17 @@ contract BaseStrategy is ERC4626, Ownable {
 
     // The message contents of failed messages are stored here.
     mapping(bytes32 => Client.Any2EVMMessage) public s_messageContents;
+    EnumerableMap.Bytes32ToUintMap internal s_failedMessages;
+
+    enum ErrorCode {
+        RESOLVED,
+        FAILED
+    }
+
+    struct FailedMessage {
+        bytes32 messageId;
+        ErrorCode errorCode;
+    }
 
     /// @notice Constructor initializes the contract with the router address.
     /// @param _router The address of the router contract.
@@ -67,7 +90,12 @@ contract BaseStrategy is ERC4626, Ownable {
         address initialOwner,
         string memory name_,
         string memory symbol_
-    ) ERC4626(asset_) ERC20(name_, symbol_) Ownable(initialOwner) {
+    )
+        ERC4626(asset_)
+        ERC20(name_, symbol_)
+        Ownable(initialOwner)
+        CCIPReceiver(_router)
+    {
         asset_.safeTransferFrom(msg.sender, address(this), _initialDeposit);
         i_router = IRouterClient(_router);
         i_linkToken = IERC20(_link);
@@ -159,6 +187,10 @@ contract BaseStrategy is ERC4626, Ownable {
         );
     }
 
+    function totalAssets() public view override returns (uint256) {
+        return _totalAccountedAssets;
+    }
+
     // Add functions to set receiver and gas limit for destination chains
     function setReceiverForDestinationChain(
         uint64 _destinationChainSelector,
@@ -174,5 +206,66 @@ contract BaseStrategy is ERC4626, Ownable {
     ) external onlyOwner {
         require(_gasLimit > 0, "Invalid gas limit");
         s_gasLimits[_destinationChainSelector] = _gasLimit;
+    }
+
+    function ccipReceive(
+        Client.Any2EVMMessage calldata any2EvmMessage
+    ) external override onlyRouter {
+        require(
+            abi.decode(any2EvmMessage.sender, (address)) ==
+                s_senders[any2EvmMessage.sourceChainSelector],
+            "Wrong sender for source chain"
+        );
+
+        try this.processMessage(any2EvmMessage) {
+            // Message processed successfully
+        } catch (bytes memory err) {
+            s_failedMessages.set(
+                any2EvmMessage.messageId,
+                uint256(ErrorCode.FAILED)
+            );
+            s_messageContents[any2EvmMessage.messageId] = any2EvmMessage;
+            emit MessageFailed(any2EvmMessage.messageId, err);
+            return;
+        }
+    }
+
+    function processMessage(
+        Client.Any2EVMMessage calldata any2EvmMessage
+    ) external {
+        require(msg.sender == address(this), "Only self");
+        _ccipReceive(any2EvmMessage);
+    }
+
+    function _ccipReceive(
+        Client.Any2EVMMessage memory any2EvmMessage
+    ) internal override {
+        (bool success, bytes memory returnData) = address(this).call(
+            any2EvmMessage.data
+        );
+        require(success, "Call to contract failed");
+
+        uint256 value = abi.decode(returnData, (uint256));
+
+        emit MessageReceived(
+            any2EvmMessage.messageId,
+            any2EvmMessage.sourceChainSelector,
+            abi.decode(any2EvmMessage.sender, (address)),
+            value
+        );
+    }
+
+    function _accountAssetsAfterHarvest(int256 aaveNetGain) internal {
+        if (aaveNetGain >= 0) {
+            _totalAccountedAssets += uint256(aaveNetGain);
+        } else {
+            _totalAccountedAssets -= uint256(-aaveNetGain);
+        }
+    }
+
+    function withdrawAll(uint256 amount) internal {
+        // Handle the withdrawal of all assets
+        // This function will be called by ccipReceive when a message is received from Optimism
+        // Implement your logic to handle the withdrawal here
     }
 }

@@ -201,7 +201,7 @@ contract OptimismStrategy is CCIPReceiver, OwnerIsCreator {
 
         bytes memory path = abi.encodePacked(
             address(weth),
-            uint24(3000), // 0.3% fee tier
+            uint24(500), // 0.05% fee tier in Optimism Sepolia
             address(usdc)
         );
 
@@ -288,11 +288,7 @@ contract OptimismStrategy is CCIPReceiver, OwnerIsCreator {
         previousVariableDebtBalance = currentVariableDebtBalance;
 
         // Send net gain value to Mode.sol
-        sendMessageToMode(
-            "_accountAssetsAfterHarvest()",
-            0,
-            uint256(aaveNetGain)
-        );
+        sendMessageToMode("_accountAssetsAfterHarvest()", 0, aaveNetGain);
 
         emit HarvestReport(aaveNetGain);
     }
@@ -324,7 +320,7 @@ contract OptimismStrategy is CCIPReceiver, OwnerIsCreator {
     function sendMessageToMode(
         string memory functionName,
         uint256 amount,
-        uint256 value
+        int256 value
     ) internal {
         uint64 destinationChainSelector = 111; // Replace with actual Mode chain selector
         address receiver = s_receivers[destinationChainSelector];
@@ -343,6 +339,7 @@ contract OptimismStrategy is CCIPReceiver, OwnerIsCreator {
                 token: address(usdc),
                 amount: amount
             });
+            IERC20(address(usdc)).approve(address(i_router), amount);
         } else {
             tokenAmounts = new Client.EVMTokenAmount[](0);
         }
@@ -362,8 +359,7 @@ contract OptimismStrategy is CCIPReceiver, OwnerIsCreator {
         Client.EVMTokenAmount[] memory tokenAmounts,
         uint256 gasLimit
     ) internal {
-        uint64 destinationChainSelector = 111; // Replace with actual Optimism chain selector
-        address receiver = s_receivers[destinationChainSelector];
+        uint64 destinationChainSelector = 111;
         Client.EVM2AnyMessage memory evm2AnyMessage = Client.EVM2AnyMessage({
             receiver: abi.encode(receiver),
             data: encodedFunction,
