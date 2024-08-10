@@ -36,6 +36,11 @@ contract Looptimism is ERC4626, Ownable {
     address public constant usdc = 0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85;
     address public constant wbtc = 0x68f180fcCe6836688e9084f035309E29Bf0A2095;
     address public constant WETH9 = 0x4200000000000000000000000000000000000006;
+    address public constant aUSDC = 0x38d693cE1dF5AaDF7bC62595A37D667aD57922e5;
+    address public constant variableDebtWbtc =
+        0x92b42c66840C7AD907b4BF74879FF3eF7c529473;
+    uint256 public previousAUSDCBalance;
+    uint256 public previousVariableDebtBalance;
 
     constructor(
         IERC20 asset_,
@@ -79,7 +84,7 @@ contract Looptimism is ERC4626, Ownable {
         _mint(receiver, shares);
 
         // Call the internal function to invest the funds
-        _investFunds(assets, assetAddress);
+        _investFunds(assets);
 
         emit Deposit(caller, receiver, assets, shares);
     }
@@ -88,7 +93,7 @@ contract Looptimism is ERC4626, Ownable {
         return _totalAccountedAssets;
     }
 
-    function _investFunds(uint256 amount, address _assetAddress) internal {
+    function _investFunds(uint256 amount) internal {
         for (uint256 i = 0; i < 3; i++) {
             bool shouldBorrow = (i != 2);
             amount = _investLoop(amount, shouldBorrow);
@@ -135,6 +140,45 @@ contract Looptimism is ERC4626, Ownable {
         }
 
         return usdcAmount;
+    }
+
+    function harvest() external onlyOwner {
+        bytes32[] memory priceFeedIds = new bytes32[](2);
+        priceFeedIds[0] = wbtcPriceFeedId;
+        priceFeedIds[1] = usdcUsdPriceFeedId;
+        uint256[] memory prices = getPricePyth(priceFeedIds);
+        uint256 wbtcPriceInUSD = prices[0];
+        uint256 usdcPriceInUSD = prices[1];
+
+        // Get current balances
+        uint256 currentAUSDCBalance = IERC20(aUSDC).balanceOf(address(this));
+        uint256 currentVariableDebtBalance = IERC20(variableDebtWbtc).balanceOf(
+            address(this)
+        );
+
+        // Calculate the change in balances
+        uint256 borrowedWETHChange = currentVariableDebtBalance -
+            previousVariableDebtBalance;
+
+        // Calculate the net gain in Aave
+        uint256 suppliedUSDCValueChange = currentAUSDCBalance -
+            previousAUSDCBalance;
+        uint256 borrowedWETHValueChangeInUSDC = (wbtcPriceInUSD *
+            borrowedWETHChange) / (usdcPriceInUSD * 10 ** 12);
+
+        int256 aaveNetGain = int256(suppliedUSDCValueChange) -
+            int256(borrowedWETHValueChangeInUSDC);
+
+        // Update the previous balances
+        previousAUSDCBalance = currentAUSDCBalance;
+        previousVariableDebtBalance = currentVariableDebtBalance;
+
+        // UPdate with totalaccountedAssets
+        if (aaveNetGain > 0) {
+            _totalAccountedAssets += uint256(aaveNetGain);
+        } else {
+            _totalAccountedAssets -= uint256(-aaveNetGain);
+        }
     }
 
     function _swap(
