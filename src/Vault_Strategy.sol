@@ -14,6 +14,7 @@ import {IPyth} from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
 import {PythStructs} from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 import {TransferHelper} from "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 import {IPythPriceUpdater} from "./interfaces/IPythPriceUpdater.sol";
+import {ISwapRouter02, IV3SwapRouter} from "./interfaces/ISwapRouter.sol";
 
 contract VaultStrategy is ERC4626, Ownable {
     using Math for uint256;
@@ -23,8 +24,9 @@ contract VaultStrategy is ERC4626, Ownable {
     IPoolDataProvider aaveProtocolDataProvider;
     IPoolAerodrome aerodromePool;
     IPythPriceUpdater public pythPriceUpdater;
+    ISwapRouter02 public immutable swapRouter;
 
-    address public constant swapRouter =
+    address public constant swapRouterAddress =
         0x2626664c2603336E57B271c5C0b26F421741e481;
     address public constant cbETH = 0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22;
     address public constant AERO = 0x940181a94A35A4569E4529A3CDfB74e38FD98631;
@@ -64,6 +66,7 @@ contract VaultStrategy is ERC4626, Ownable {
         );
         aerodromePool = IPoolAerodrome(aerodromePoolContract);
         pythPriceUpdater = IPythPriceUpdater(pythPriceUpdaterContract);
+        swapRouter = ISwapRouter02(swapRouterAddress);
     }
 
     // New internal function that includes priceUpdate
@@ -324,7 +327,7 @@ contract VaultStrategy is ERC4626, Ownable {
         uint256 fee2,
         uint256 amountIn
     ) internal returns (uint256 amountOut) {
-        TransferHelper.safeApprove(tokenIn, swapRouter, amountIn);
+        TransferHelper.safeApprove(tokenIn, address(swapRouter), amountIn);
 
         bytes memory path = abi.encodePacked(
             tokenIn,
@@ -334,19 +337,15 @@ contract VaultStrategy is ERC4626, Ownable {
             tokenOut
         );
 
-        bytes memory callData = abi.encodeWithSelector(
-            bytes4(0xb858183f), // selector for exactInput(tuple)
-            abi.encode(
-                path,
-                address(this),
-                amountIn,
-                0 // amountOutMinimum
-            )
-        );
+        IV3SwapRouter.ExactInputParams memory params = IV3SwapRouter
+            .ExactInputParams({
+                path: path,
+                recipient: address(this),
+                amountIn: amountIn,
+                amountOutMinimum: 0
+            });
 
-        (bool success, bytes memory result) = swapRouter.call(callData);
-        require(success, "Swap failed");
-        amountOut = abi.decode(result, (uint256));
+        amountOut = swapRouter.exactInput(params);
     }
 
     function _swapcbETHToUSDCAndAERO(
