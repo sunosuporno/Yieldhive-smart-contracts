@@ -350,7 +350,7 @@ contract OptimismStrategy is CCIPReceiver, OwnerIsCreator {
         uint256 amount,
         int256 value
     ) internal {
-        uint64 destinationChainSelector = 111; // Replace with actual Mode chain selector
+        uint64 destinationChainSelector = 829525985033418733; // Replace with actual Mode chain selector
         address receiver = s_receivers[destinationChainSelector];
         require(
             receiver != address(0),
@@ -387,7 +387,7 @@ contract OptimismStrategy is CCIPReceiver, OwnerIsCreator {
         Client.EVMTokenAmount[] memory tokenAmounts,
         uint256 gasLimit
     ) internal {
-        uint64 destinationChainSelector = 111;
+        uint64 destinationChainSelector = 829525985033418733;
         Client.EVM2AnyMessage memory evm2AnyMessage = Client.EVM2AnyMessage({
             receiver: abi.encode(receiver),
             data: encodedFunction,
@@ -431,5 +431,21 @@ contract OptimismStrategy is CCIPReceiver, OwnerIsCreator {
     function getPricePyth(bytes32 priceFeedId) public view returns (uint) {
         PythStructs.Price memory price = pyth.getPrice(priceFeedId);
         return uint256(uint64(price.price));
+    }
+
+    function setReceiverForDestinationChain(
+        uint64 _destinationChainSelector,
+        address _receiver
+    ) external onlyOwner {
+        require(_receiver != address(0), "Invalid receiver address");
+        s_receivers[_destinationChainSelector] = _receiver;
+    }
+
+    function setGasLimitForDestinationChain(
+        uint64 _destinationChainSelector,
+        uint256 _gasLimit
+    ) external onlyOwner {
+        require(_gasLimit > 0, "Invalid gas limit");
+        s_gasLimits[_destinationChainSelector] = _gasLimit;
     }
 }

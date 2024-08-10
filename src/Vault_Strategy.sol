@@ -325,6 +325,7 @@ contract VaultStrategy is ERC4626, Ownable {
         uint256 amountIn
     ) internal returns (uint256 amountOut) {
         TransferHelper.safeApprove(tokenIn, swapRouter, amountIn);
+
         bytes memory path = abi.encodePacked(
             tokenIn,
             uint24(fee1),
@@ -333,12 +334,17 @@ contract VaultStrategy is ERC4626, Ownable {
             tokenOut
         );
 
-        bytes memory data = abi.encodeWithSignature(
-            "exactInput((bytes,address,uint256,uint256))",
-            abi.encode(path, address(this), amountIn, 0)
+        bytes memory callData = abi.encodeWithSelector(
+            bytes4(0xb858183f), // selector for exactInput(tuple)
+            abi.encode(
+                path,
+                address(this),
+                amountIn,
+                0 // amountOutMinimum
+            )
         );
 
-        (bool success, bytes memory result) = swapRouter.call(data);
+        (bool success, bytes memory result) = swapRouter.call(callData);
         require(success, "Swap failed");
         amountOut = abi.decode(result, (uint256));
     }

@@ -109,7 +109,6 @@ contract BaseStrategy is ERC4626, Ownable, CCIPReceiver {
     /// @param _router The address of the router contract.
     /// @param _link The address of the link contract.
     /// @param _initialDeposit The initial deposit of assets.
-    /// @param _asset The address of the asset token.
     /// @param initialOwner The address of the initial owner.
     /// @param name_ The name of the token.
     /// @param symbol_ The symbol of the token.
@@ -118,7 +117,6 @@ contract BaseStrategy is ERC4626, Ownable, CCIPReceiver {
         address _router,
         address _link,
         uint256 _initialDeposit,
-        address _asset,
         address initialOwner,
         string memory name_,
         string memory symbol_
@@ -128,7 +126,7 @@ contract BaseStrategy is ERC4626, Ownable, CCIPReceiver {
         Ownable(initialOwner)
         CCIPReceiver(_router)
     {
-        asset_.safeTransferFrom(msg.sender, address(this), _initialDeposit);
+        // asset_.safeTransferFrom(msg.sender, address(this), _initialDeposit);
         i_router = IRouterClient(_router);
         i_linkToken = IERC20(_link);
     }
@@ -169,7 +167,7 @@ contract BaseStrategy is ERC4626, Ownable, CCIPReceiver {
     }
 
     function _initiateWithdrawal(uint256 amount, address receiver) internal {
-        uint64 destinationChainSelector = 111; // Replace with actual Optimism chain selector
+        uint64 destinationChainSelector = 829525985033418733; // Replace with actual Optimism chain selector
         address optimismReceiver = s_receivers[destinationChainSelector];
         require(
             optimismReceiver != address(0),
@@ -227,7 +225,7 @@ contract BaseStrategy is ERC4626, Ownable, CCIPReceiver {
     }
 
     function _investFunds(uint256 assets, address assetAddress) internal {
-        uint64 destinationChainSelector = 111; // Replace with actual Optimism chain selector
+        uint64 destinationChainSelector = 829525985033418733; // Replace with actual Optimism chain selector
         address receiver = s_receivers[destinationChainSelector];
         require(assets > 0, "Amount must be greater than 0");
         require(
@@ -276,6 +274,8 @@ contract BaseStrategy is ERC4626, Ownable, CCIPReceiver {
             destinationChainSelector,
             evm2AnyMessage
         );
+
+        _totalAccountedAssets += assets;
 
         emit MessageSent(
             messageId,
