@@ -125,7 +125,7 @@ contract Looptimism is ERC4626, Ownable {
                 .getReserveConfigurationData(address(usdc));
             // Calculating the maximum loan amount in USD
             uint256 maxLoanAmountIn18DecimalsInUSD = (usdcAmountIn18DecimalsInUSD *
-                    ltv) / 10 ** 5;
+                    ltv) / 10 ** 4;
             // Calculating the maximum amount of cbETH that can be borrowed
             uint256 wbtcAbleToBorrow = (maxLoanAmountIn18DecimalsInUSD *
                 10 ** 8) / wbtcPriceInUSD;

@@ -139,7 +139,7 @@ contract VaultStrategy is ERC4626, Ownable {
             .getReserveConfigurationData(assetAddress);
         // Calculating the maximum loan amount in USD
         uint256 maxLoanAmountIn18DecimalsInUSD = (usdcAmountIn18DecimalsInUSD *
-            ltv) / 10 ** 5;
+            ltv) / 10 ** 4;
         // Calculating the maximum amount of cbETH that can be borrowed
         uint256 cbEthAbleToBorrow = (maxLoanAmountIn18DecimalsInUSD *
             10 ** 18) / cbEthPriceInUSD;
