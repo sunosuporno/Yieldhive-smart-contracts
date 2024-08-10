@@ -13,6 +13,7 @@ import {IPoolDataProvider} from "./interfaces/IPoolDataProvider.sol";
 import {IPyth} from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
 import {PythStructs} from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 import {TransferHelper} from "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
+import {IPythPriceUpdater} from "./interfaces/IPythPriceUpdater.sol";
 
 contract VaultStrategy is ERC4626, Ownable {
     using Math for uint256;
@@ -21,6 +22,7 @@ contract VaultStrategy is ERC4626, Ownable {
     IPoolAave aavePool;
     IPoolDataProvider aaveProtocolDataProvider;
     IPoolAerodrome aerodromePool;
+    IPythPriceUpdater public pythPriceUpdater;
 
     address public constant swapRouter =
         0x2626664c2603336E57B271c5C0b26F421741e481;
@@ -51,15 +53,17 @@ contract VaultStrategy is ERC4626, Ownable {
         address pythContract,
         address aavePoolContract,
         address aaveProtocolDataProviderContract,
-        address aerodromePoolContract
+        address aerodromePoolContract,
+        address pythPriceUpdaterContract
     ) ERC4626(asset_) ERC20(name_, symbol_) Ownable(initialOwner) {
-        asset_.safeTransferFrom(msg.sender, address(this), _initialDeposit);
+        // asset_.safeTransferFrom(msg.sender, address(this), _initialDeposit);
         pyth = IPyth(pythContract);
         aavePool = IPoolAave(aavePoolContract);
         aaveProtocolDataProvider = IPoolDataProvider(
             aaveProtocolDataProviderContract
         );
         aerodromePool = IPoolAerodrome(aerodromePoolContract);
+        pythPriceUpdater = IPythPriceUpdater(pythPriceUpdaterContract);
     }
 
     // New internal function that includes priceUpdate
@@ -112,10 +116,12 @@ contract VaultStrategy is ERC4626, Ownable {
 
     function _investFunds(uint256 amount, address assetAddress) internal {
         // Get the price of the assets in USD from Pyth Network
-        uint64 usdcPriceInUSD = uint64(getPricePyth(usdcUsdPriceFeedId).price);
-        uint64 cbEthPriceInUSD = uint64(
-            getPricePyth(cbEthUsdPriceFeedId).price
-        );
+        bytes32[] memory priceFeedIds = new bytes32[](2);
+        priceFeedIds[0] = usdcUsdPriceFeedId;
+        priceFeedIds[1] = cbEthUsdPriceFeedId;
+        uint256[] memory prices = getPricePyth(priceFeedIds);
+        uint256 usdcPriceInUSD = prices[0];
+        uint256 cbEthPriceInUSD = prices[1];
         // approve and supply the asset USDC to the Aave pool
         IERC20(assetAddress).approve(address(aavePool), amount);
         aavePool.supply(assetAddress, amount, address(this), 0);
@@ -124,7 +130,7 @@ contract VaultStrategy is ERC4626, Ownable {
         uint256 usdcAmountIn18Decimals = amount * 10 ** 12;
         // Finding total price of the asset supplied in USD
         uint256 usdcAmountIn18DecimalsInUSD = (usdcAmountIn18Decimals *
-            (usdcPriceInUSD)) / 10 ** 8;
+            usdcPriceInUSD) / 10 ** 18;
         // Fetching LTV of USDC from Aave
         (, uint256 ltv, , , , , , , , ) = aaveProtocolDataProvider
             .getReserveConfigurationData(assetAddress);
@@ -132,8 +138,8 @@ contract VaultStrategy is ERC4626, Ownable {
         uint256 maxLoanAmountIn18DecimalsInUSD = (usdcAmountIn18DecimalsInUSD *
             ltv) / 10 ** 5;
         // Calculating the maximum amount of cbETH that can be borrowed
-        uint256 cbEthAbleToBorrow = (maxLoanAmountIn18DecimalsInUSD * 10 ** 8) /
-            cbEthPriceInUSD;
+        uint256 cbEthAbleToBorrow = (maxLoanAmountIn18DecimalsInUSD *
+            10 ** 18) / cbEthPriceInUSD;
         // Borrowing cbETH after calculating a safe amount
         uint256 safeAmount = (cbEthAbleToBorrow * 95) / 100;
         aavePool.borrow(cbETH, safeAmount, 2, 0, address(this));
@@ -211,18 +217,26 @@ contract VaultStrategy is ERC4626, Ownable {
     }
 
     function _swapUSDCToCbETH(uint256 cbEthAmount) internal returns (uint256) {
-        int64 cbEthPrice = getPricePyth(cbEthUsdPriceFeedId).price;
-        int64 usdcPrice = getPricePyth(usdcUsdPriceFeedId).price;
-        uint256 usdcAmount = (uint64(cbEthPrice) * cbEthAmount * 10 ** 12) /
-            uint64(usdcPrice);
+        bytes32[] memory priceFeedIds = new bytes32[](2);
+        priceFeedIds[0] = cbEthUsdPriceFeedId;
+        priceFeedIds[1] = usdcUsdPriceFeedId;
+        uint256[] memory prices = getPricePyth(priceFeedIds);
+        uint256 cbEthPrice = prices[0];
+        uint256 usdcPrice = prices[1];
+        uint256 usdcAmount = (cbEthPrice * cbEthAmount * 10 ** 12) / usdcPrice;
         return _swap(asset(), cbETH, 500, 500, usdcAmount);
     }
 
     function harvestReinvestAndReport() external onlyOwner {
         // Get prices from Pyth Network
-        uint64 cbETHPrice = uint64(getPricePyth(cbEthUsdPriceFeedId).price);
-        uint64 usdcPrice = uint64(getPricePyth(usdcUsdPriceFeedId).price);
-        uint64 aeroPriceInUSD = uint64(getPricePyth(aeroUsdPriceFeedId).price);
+        bytes32[] memory priceFeedIds = new bytes32[](3);
+        priceFeedIds[0] = cbEthUsdPriceFeedId;
+        priceFeedIds[1] = usdcUsdPriceFeedId;
+        priceFeedIds[2] = aeroUsdPriceFeedId;
+        uint256[] memory prices = getPricePyth(priceFeedIds);
+        uint256 cbETHPrice = prices[0];
+        uint256 usdcPrice = prices[1];
+        uint256 aeroPriceInUSD = prices[2];
 
         // Get current balances
         uint256 currentAUSDCBalance = IERC20(aUSDC).balanceOf(address(this));
@@ -359,10 +373,33 @@ contract VaultStrategy is ERC4626, Ownable {
     }
 
     function getPricePyth(
-        bytes32 priceFeedId
-    ) public view returns (PythStructs.Price memory) {
-        PythStructs.Price memory price = pyth.getPrice(priceFeedId);
-        return price;
+        bytes32[] memory priceFeedIds
+    ) public payable returns (uint256[] memory) {
+        bytes[] memory priceUpdate = pythPriceUpdater.getPricePyth();
+        uint fee = pyth.getUpdateFee(priceUpdate);
+        pyth.updatePriceFeeds{value: fee}(priceUpdate);
+
+        uint256[] memory prices = new uint256[](priceFeedIds.length);
+
+        // Read the current price from each price feed if it is less than 60 seconds old.
+        for (uint i = 0; i < priceFeedIds.length; i++) {
+            PythStructs.Price memory pythPrice = pyth.getPriceNoOlderThan(
+                priceFeedIds[i],
+                120
+            );
+
+            // Convert the price to a uint256 value
+            // The price is stored as a signed integer with a specific exponent
+            // We need to adjust it to get the actual price in a common unit (e.g., 18 decimals)
+            int64 price = pythPrice.price;
+
+            // Convert the price to a positive value with 18 decimals
+            uint256 adjustedPrice = uint256(uint64(price));
+
+            prices[i] = adjustedPrice;
+        }
+
+        return prices;
     }
 
     event HarvestReport(

@@ -14,18 +14,17 @@ contract Vault_StrategyScript is Script {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
         vm.startBroadcast(deployerPrivateKey);
 
-        address asset = 0x036CbD53842c5426634e7929541eC2318f3dCF7e;
-        uint256 initialDeposit = 0; //
+        address asset = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+        uint256 initialDeposit = 100; //
         address initialOwner = 0x07a721260416e764618B059811eaf099a940Af14;
         string memory name = "YieldHive Prime USDC";
         string memory symbol = "ypUSDC";
-        address pythContract = 0xA2aa501b19aff244D90cc15a4Cf739D2725B5729;
-        address aavePoolContract = 0x07eA79F68B2B3df564D0A34F8e19D9B1e339814b;
-        address aaveProtocolDataProviderContract = 0x80437224dc5Dcb43C5fC87CBdE73152418055274;
+        address pythContract = 0x8250f4aF4B972684F7b336503E2D6dFeDeB1487a;
+        address aavePoolContract = 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5;
+        address aaveProtocolDataProviderContract = 0x793177a6Cf520C7fE5B2E45660EBB48132184BBC;
         address aerodromePoolContract = 0x6cDcb1C4A4D1C3C6d054b27AC5B77e89eAFb971d; // mainnet
-
+        address pythPriceUpdaterContract = 0x4896bB51d19A7c7a69e48732580FB628903086eF;
         // Approve the transfer of initial deposit
-        IERC20(asset).approve(address(this), initialDeposit);
 
         vault_strategy = new VaultStrategy(
             IERC20(asset),
@@ -36,7 +35,8 @@ contract Vault_StrategyScript is Script {
             pythContract,
             aavePoolContract,
             aaveProtocolDataProviderContract,
-            aerodromePoolContract
+            aerodromePoolContract,
+            pythPriceUpdaterContract
         );
 
         vm.stopBroadcast();

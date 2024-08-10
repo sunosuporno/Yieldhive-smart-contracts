@@ -3,3 +3,4 @@
 @uniswap/v3-periphery/=lib/v3-periphery/
 @uniswap/v3-core/=lib/v3-core/
 @chainlink/contracts-ccip@1.4.0/=node_modules/@chainlink/contracts-ccip/
+@chainlink/contracts/src/v0.8/=node_modules/@chainlink/contracts/src/v0.8/
