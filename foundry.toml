@@ -7,9 +7,11 @@ libs = ["lib"]
 [rpc_endpoints]
 sepolia = "${SEPOLIA_RPC_URL}"
 tenderly = "${TENDERLY_VIRTUAL_TESTNET_RPC}"
+tenderly_optimism = "${TENDERLY_VIRTUAL_TESTNET_RPC_OPTIMISM}"
 
 [etherscan]
 sepolia = { key = "WZKU76I4PEGAJXKCZ2PVWM6QRCAXMH9IZI", url = "//api.basescan.org/api" }
 #                   Paste TENDERLY_ACCESS_KEY    Chain ID        Verifier URL: ${TENDERLY_VIRTUAL_TESTNET_RPC}/verify/etherscan
 unknown_chain = { key = "${TENDERLY_ACCESS_KEY}", chain = 84535660, url = "${TENDERLY_VIRTUAL_TESTNET_RPC}/verify/etherscan" }
+unknown_chain_optimism = { key = "${TENDERLY_ACCESS_KEY}", chain = 1077121, url = "${TENDERLY_VIRTUAL_TESTNET_RPC_OPTIMISM}/verify/etherscan" }
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

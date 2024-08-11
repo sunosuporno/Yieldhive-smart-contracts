@@ -32,7 +32,7 @@ contract Looptimism is ERC4626, Ownable {
     bytes32 public constant wbtcPriceFeedId =
         0xc9d8b075a5c69303365ae23633d4e085199bf5c520a3b90fed1322a0342ffc33;
     address public constant swapRouterAddress =
-        0x2626664c2603336E57B271c5C0b26F421741e481;
+        0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45;
     address public constant usdc = 0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85;
     address public constant wbtc = 0x68f180fcCe6836688e9084f035309E29Bf0A2095;
     address public constant WETH9 = 0x4200000000000000000000000000000000000006;
@@ -51,7 +51,6 @@ contract Looptimism is ERC4626, Ownable {
         address pythContract,
         address aavePoolContract,
         address aaveProtocolDataProviderContract,
-        address aerodromePoolContract,
         address pythPriceUpdaterContract
     ) ERC4626(asset_) ERC20(name_, symbol_) Ownable(initialOwner) {
         // asset_.safeTransferFrom(msg.sender, address(this), _initialDeposit);
@@ -60,7 +59,6 @@ contract Looptimism is ERC4626, Ownable {
         aaveProtocolDataProvider = IPoolDataProvider(
             aaveProtocolDataProviderContract
         );
-        aerodromePool = IPoolAerodrome(aerodromePoolContract);
         pythPriceUpdater = IPythPriceUpdater(pythPriceUpdaterContract);
         swapRouter = ISwapRouter02(swapRouterAddress);
     }
@@ -116,18 +114,18 @@ contract Looptimism is ERC4626, Ownable {
         aavePool.supply(address(usdc), usdcAmount, address(this), 0);
 
         if (shouldBorrow) {
-            uint256 usdcAmountIn18Decimals = usdcAmount * 10 ** 12;
+            uint256 usdcAmountIn8Decimals = usdcAmount * 10 ** 2;
             // Finding total price of the asset supplied in USD
-            uint256 usdcAmountIn18DecimalsInUSD = (usdcAmountIn18Decimals *
+            uint256 usdcAmountIn8DecimalsInUSD = (usdcAmountIn8Decimals *
                 (usdcPriceInUSD)) / 10 ** 8;
             // Fetching LTV of USDC from Aave
             (, uint256 ltv, , , , , , , , ) = aaveProtocolDataProvider
                 .getReserveConfigurationData(address(usdc));
             // Calculating the maximum loan amount in USD
-            uint256 maxLoanAmountIn18DecimalsInUSD = (usdcAmountIn18DecimalsInUSD *
+            uint256 maxLoanAmountIn8DecimalsInUSD = (usdcAmountIn8DecimalsInUSD *
                     ltv) / 10 ** 4;
             // Calculating the maximum amount of cbETH that can be borrowed
-            uint256 wbtcAbleToBorrow = (maxLoanAmountIn18DecimalsInUSD *
+            uint256 wbtcAbleToBorrow = (maxLoanAmountIn8DecimalsInUSD *
                 10 ** 8) / wbtcPriceInUSD;
             // Borrowing cbETH after calculating a safe amount
             uint256 safeAmount = (wbtcAbleToBorrow * 95) / 100;
@@ -157,17 +155,17 @@ contract Looptimism is ERC4626, Ownable {
         );
 
         // Calculate the change in balances
-        uint256 borrowedWETHChange = currentVariableDebtBalance -
+        uint256 borrowedWbtcChange = currentVariableDebtBalance -
             previousVariableDebtBalance;
 
         // Calculate the net gain in Aave
         uint256 suppliedUSDCValueChange = currentAUSDCBalance -
             previousAUSDCBalance;
-        uint256 borrowedWETHValueChangeInUSDC = (wbtcPriceInUSD *
-            borrowedWETHChange) / (usdcPriceInUSD * 10 ** 12);
+        uint256 borrowedWbtcValueChangeInUSDC = (wbtcPriceInUSD *
+            borrowedWbtcChange) / (usdcPriceInUSD * 10 ** 2);
 
         int256 aaveNetGain = int256(suppliedUSDCValueChange) -
-            int256(borrowedWETHValueChangeInUSDC);
+            int256(borrowedWbtcValueChangeInUSDC);
 
         // Update the previous balances
         previousAUSDCBalance = currentAUSDCBalance;
