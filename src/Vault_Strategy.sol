@@ -15,6 +15,7 @@ import {PythStructs} from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 import {TransferHelper} from "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 import {IPythPriceUpdater} from "./interfaces/IPythPriceUpdater.sol";
 import {ISwapRouter02, IV3SwapRouter} from "./interfaces/ISwapRouter.sol";
+import {DataTypes} from "./interfaces/DataTypes.sol";
 
 contract VaultStrategy is ERC4626, Ownable {
     using Math for uint256;
@@ -45,6 +46,9 @@ contract VaultStrategy is ERC4626, Ownable {
     // Add new state variables to keep track of the previous balances
     uint256 public previousAUSDCBalance;
     uint256 public previousVariableDebtBalance;
+
+    // Define the target health factor with 4 decimal places
+    uint256 TARGET_HEALTH_FACTOR = 11000; // 1.1 with 4 decimal places
 
     constructor(
         IERC20 asset_,
@@ -129,25 +133,25 @@ contract VaultStrategy is ERC4626, Ownable {
         IERC20(assetAddress).approve(address(aavePool), amount);
         aavePool.supply(assetAddress, amount, address(this), 0);
 
-        // Convert the amount of USDC supplied in 18 decimals
+        // Convert the amount of USDC supplied to 18 decimals
         uint256 usdcAmountIn18Decimals = amount * 10 ** 12;
-        // Finding total price of the asset supplied in USD
+        // Finding total price of the asset supplied in USD (now correctly using 10**8)
         uint256 usdcAmountIn18DecimalsInUSD = (usdcAmountIn18Decimals *
-            usdcPriceInUSD) / 10 ** 18;
+            usdcPriceInUSD) / 10 ** 8;
         // Fetching LTV of USDC from Aave
         (, uint256 ltv, , , , , , , , ) = aaveProtocolDataProvider
             .getReserveConfigurationData(assetAddress);
         // Calculating the maximum loan amount in USD
         uint256 maxLoanAmountIn18DecimalsInUSD = (usdcAmountIn18DecimalsInUSD *
             ltv) / 10 ** 4;
-        // Calculating the maximum amount of cbETH that can be borrowed
-        uint256 cbEthAbleToBorrow = (maxLoanAmountIn18DecimalsInUSD *
-            10 ** 18) / cbEthPriceInUSD;
+        // Calculating the maximum amount of cbETH that can be borrowed (now correctly using 10**8)
+        uint256 cbEthAbleToBorrow = (maxLoanAmountIn18DecimalsInUSD * 10 ** 8) /
+            cbEthPriceInUSD;
         // Borrowing cbETH after calculating a safe amount
         uint256 safeAmount = (cbEthAbleToBorrow * 95) / 100;
         aavePool.borrow(cbETH, safeAmount, 2, 0, address(this));
         uint256 cbEthBalance = IERC20(cbETH).balanceOf(address(this));
-        (uint usdcReceived, uint aeroReceived) = _swapcbETHToUSDCAndAERO(
+        (uint256 usdcReceived, uint256 aeroReceived) = _swapcbETHToUSDCAndAERO(
             cbEthBalance
         );
         IERC20(asset()).safeTransfer(address(aerodromePool), usdcReceived);
@@ -160,74 +164,120 @@ contract VaultStrategy is ERC4626, Ownable {
     }
 
     function _withdrawFunds(uint256 amount) internal {
-        // 1. Calculate the proportion of LP tokens to burn
-        uint256 totalLPBalance = IERC20(address(aerodromePool)).balanceOf(
-            address(this)
-        );
-        uint256 lpTokensToBurn = (amount * totalLPBalance) /
-            _totalAccountedAssets;
+        // First, withdraw the requested amount
+        aavePool.withdraw(asset(), amount, address(this));
 
-        // 2. Transfer LP tokens to this contract
-        IERC20(address(aerodromePool)).transfer(address(this), lpTokensToBurn);
+        // Calculate the new health factor after withdrawal
+        uint256 healthFactor = calculateHealthFactor();
 
-        // 3. Burn LP tokens
-        (uint256 usdc, uint256 aero) = aerodromePool.burn(address(this));
+        // If the health factor is below the desired threshold, rebalance
+        if (healthFactor < 1.1e18) {
+            // 1.1 with 18 decimal places
+            rebalancePosition();
+        }
 
-        // 4. Swap AERO to USDC if necessary
+        // Update total accounted assets
+        _totalAccountedAssets -= amount;
+    }
+
+    function calculateHealthFactor() internal view returns (uint256) {
+        (
+            uint256 totalCollateralBase,
+            uint256 totalDebtBase,
+            uint256 availableBorrowsBase,
+            uint256 currentLiquidationThreshold,
+            uint256 ltv,
+            uint256 healthFactor
+        ) = aavePool.getUserAccountData(address(this));
+
+        return healthFactor;
+    }
+
+    function getMaxWithdrawableAmount() internal view returns (uint256) {
+        address assetAddress = asset();
+        (
+            uint256 currentATokenBalance,
+            uint256 currentStableDebt,
+            uint256 currentVariableDebt,
+            uint256 principalStableDebt,
+            uint256 scaledVariableDebt,
+            uint256 stableBorrowRate,
+            uint256 liquidityRate,
+            uint40 stableRateLastUpdated,
+            bool usageAsCollateralEnabled
+        ) = aaveProtocolDataProvider.getUserReserveData(
+                assetAddress,
+                address(this)
+            );
+
+        // The maximum withdrawable amount is the current aToken balance
+        return currentATokenBalance;
+    }
+
+    function rebalancePosition() internal {
+        (
+            uint256 totalCollateralBase,
+            uint256 totalDebtBase,
+            ,
+            uint256 currentLiquidationThreshold,
+            ,
+            uint256 currentHealthFactor
+        ) = aavePool.getUserAccountData(address(this));
+
+        // Convert currentHealthFactor to 4 decimal places for comparison
+        uint256 currentHealthFactor4Dec = currentHealthFactor / 1e14;
+
+        if (currentHealthFactor4Dec >= TARGET_HEALTH_FACTOR) {
+            return; // No need to rebalance
+        }
+
+        // Calculate the amount of debt to repay to reach the target health factor
+        uint256 debtToRepay = totalDebtBase -
+            (totalCollateralBase * currentLiquidationThreshold) /
+            TARGET_HEALTH_FACTOR;
+
+        // Convert debtToRepay from base units (USD with 8 decimals) to cbETH (18 decimals)
+        uint256 cbEthPriceInUsd = getPricePyth([cbEthUsdPriceFeedId])[0];
+        uint256 cbEthToRepay = (debtToRepay * 1e18) / cbEthPriceInUsd;
+
+        // Calculate how much to withdraw from Aerodrome Pool
+        uint256 lpTokensToBurn = _calculateLPTokensToWithdraw(cbEthToRepay);
+        (uint256 usdc, uint256 aero) = aerodromePool.burn(lpTokensToBurn);
+
+        // Swap AERO to USDC
         if (aero > 0) {
             usdc += _swapAEROToUSDC(aero);
         }
 
-        // 5. Repay cbETH debt on Aave if necessary
-        uint256 cbEthDebt = IERC20(variableDebtCbETH).balanceOf(address(this));
-        if (cbEthDebt > 0) {
-            uint256 cbEthToRepay = (amount * cbEthDebt) / _totalAccountedAssets;
-            uint256 usdcForCbEth = _swapUSDCToCbETH(cbEthToRepay);
-            IERC20(cbETH).approve(address(aavePool), cbEthToRepay);
-            aavePool.repay(cbETH, cbEthToRepay, 2, address(this));
-            usdc -= usdcForCbEth;
+        // Swap USDC to cbETH
+        uint256 cbEthReceived = _swapUSDCToCbETH(usdc);
+
+        // Repay cbETH debt
+        IERC20(cbETH).approve(address(aavePool), cbEthReceived);
+        aavePool.repay(cbETH, cbEthReceived, 2, address(this));
+
+        // Check if we've reached the target health factor, if not, consider supplying more collateral
+        uint256 newHealthFactor = calculateHealthFactor();
+        if (newHealthFactor < TARGET_HEALTH_FACTOR * 1e14) {
+            // Consider supplying more collateral here if needed
         }
-
-        // 6. Withdraw USDC from Aave if necessary
-        uint256 usdcBalance = IERC20(asset()).balanceOf(address(this));
-        if (usdcBalance + usdc < amount) {
-            uint256 aUSDCBalance = IERC20(aUSDC).balanceOf(address(this));
-            uint256 usdcToWithdraw = amount - (usdcBalance + usdc);
-            if (usdcToWithdraw > aUSDCBalance) {
-                usdcToWithdraw = aUSDCBalance;
-            }
-            aavePool.withdraw(asset(), usdcToWithdraw, address(this));
-            usdc += usdcToWithdraw;
-        }
-
-        // 7. Ensure we have enough USDC to cover the withdrawal
-        require(usdcBalance + usdc >= amount, "Insufficient USDC balance");
-
-        // 8. Update total accounted assets
-        _totalAccountedAssets -= amount;
-
-        // Transfer the withdrawn amount to the user
-        IERC20(asset()).transfer(msg.sender, amount);
     }
 
     function _calculateLPTokensToWithdraw(
-        uint256 amount
+        uint256 cbEthAmount
     ) internal view returns (uint256) {
         uint256 totalLPBalance = IERC20(address(aerodromePool)).balanceOf(
             address(this)
         );
-        return (amount * totalLPBalance) / _totalAccountedAssets;
-    }
 
-    function _swapUSDCToCbETH(uint256 cbEthAmount) internal returns (uint256) {
-        bytes32[] memory priceFeedIds = new bytes32[](2);
-        priceFeedIds[0] = cbEthUsdPriceFeedId;
-        priceFeedIds[1] = usdcUsdPriceFeedId;
-        uint256[] memory prices = getPricePyth(priceFeedIds);
-        uint256 cbEthPrice = prices[0];
-        uint256 usdcPrice = prices[1];
-        uint256 usdcAmount = (cbEthPrice * cbEthAmount * 10 ** 12) / usdcPrice;
-        return _swap(asset(), cbETH, 500, 500, usdcAmount);
+        // Convert cbETH amount to USD value
+        uint256 cbEthPriceInUsd = getPricePyth([cbEthUsdPriceFeedId])[0];
+        uint256 cbEthValueInUsd = (cbEthAmount * cbEthPriceInUsd) / 1e18;
+
+        // Adjust for 8 decimal places in base currency
+        uint256 cbEthValueInBase = cbEthValueInUsd / 1e10;
+
+        return (cbEthValueInBase * totalLPBalance) / _totalAccountedAssets;
     }
 
     function harvestReinvestAndReport() external onlyOwner {
@@ -254,11 +304,11 @@ contract VaultStrategy is ERC4626, Ownable {
         // Calculate the net gain in Aave
         uint256 suppliedUSDCValueChange = currentAUSDCBalance -
             previousAUSDCBalance;
-        uint256 borrowedCbETHValueChangeInUSDC = (cbETHPrice *
+        uint256 borrowedCbETHValueChangeInUSD = (cbETHPrice *
             borrowedCbETHChange) / (usdcPrice * 10 ** 12);
 
         int256 aaveNetGain = int256(suppliedUSDCValueChange) -
-            int256(borrowedCbETHValueChangeInUSDC);
+            int256(borrowedCbETHValueChangeInUSD);
 
         // Update the previous balances
         previousAUSDCBalance = currentAUSDCBalance;

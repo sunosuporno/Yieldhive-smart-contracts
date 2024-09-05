@@ -92,8 +92,8 @@ contract Looptimism is ERC4626, Ownable {
     }
 
     function _investFunds(uint256 amount) internal {
-        for (uint256 i = 0; i < 3; i++) {
-            bool shouldBorrow = (i != 2);
+        for (uint256 i = 0; i < 4; i++) {
+            bool shouldBorrow = (i != 3);
             amount = _investLoop(amount, shouldBorrow);
         }
     }
