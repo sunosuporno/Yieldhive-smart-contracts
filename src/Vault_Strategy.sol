@@ -4,6 +4,8 @@ pragma solidity ^0.8.26;
 import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
+import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
@@ -15,9 +17,9 @@ import {PythStructs} from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 import {TransferHelper} from "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 import {IPythPriceUpdater} from "./interfaces/IPythPriceUpdater.sol";
 import {ISwapRouter02, IV3SwapRouter} from "./interfaces/ISwapRouter.sol";
-import {DataTypes} from "./interfaces/DataTypes.sol";
+// import {DataTypes} from "./interfaces/DataTypes.sol";
 
-contract VaultStrategy is ERC4626, Ownable {
+contract VaultStrategy is ERC4626, Ownable2Step, AccessControl {
     using Math for uint256;
     using SafeERC20 for IERC20;
     IPyth pyth;
@@ -48,7 +50,10 @@ contract VaultStrategy is ERC4626, Ownable {
     uint256 public previousVariableDebtBalance;
 
     // Define the target health factor with 4 decimal places
-    uint256 TARGET_HEALTH_FACTOR = 11000; // 1.1 with 4 decimal places
+    uint256 public constant TARGET_HEALTH_FACTOR = 11000; // 1.1 with 4 decimal places
+    uint256 public constant HEALTH_FACTOR_BUFFER = 500; // 0.05 with 4 decimal places
+
+    bytes32 public constant REBALANCER_ROLE = keccak256("REBALANCER_ROLE");
 
     constructor(
         IERC20 asset_,
@@ -62,6 +67,9 @@ contract VaultStrategy is ERC4626, Ownable {
         address aerodromePoolContract,
         address pythPriceUpdaterContract
     ) ERC4626(asset_) ERC20(name_, symbol_) Ownable(initialOwner) {
+        _grantRole(DEFAULT_ADMIN_ROLE, initialOwner);
+        _grantRole(REBALANCER_ROLE, initialOwner);
+
         // asset_.safeTransferFrom(msg.sender, address(this), _initialDeposit);
         pyth = IPyth(pythContract);
         aavePool = IPoolAave(aavePoolContract);
@@ -167,117 +175,106 @@ contract VaultStrategy is ERC4626, Ownable {
         // First, withdraw the requested amount
         aavePool.withdraw(asset(), amount, address(this));
 
-        // Calculate the new health factor after withdrawal
+        // Check and rebalance if necessary
         uint256 healthFactor = calculateHealthFactor();
+        uint256 currentHealthFactor4Dec = healthFactor / 1e14;
+        uint256 bufferedTargetHealthFactor = TARGET_HEALTH_FACTOR +
+            HEALTH_FACTOR_BUFFER;
 
-        // If the health factor is below the desired threshold, rebalance
-        if (healthFactor < 1.1e18) {
-            // 1.1 with 18 decimal places
-            rebalancePosition();
+        if (currentHealthFactor4Dec < bufferedTargetHealthFactor) {
+            _rebalancePosition();
         }
 
         // Update total accounted assets
         _totalAccountedAssets -= amount;
     }
 
-    function calculateHealthFactor() internal view returns (uint256) {
-        (
-            uint256 totalCollateralBase,
-            uint256 totalDebtBase,
-            uint256 availableBorrowsBase,
-            uint256 currentLiquidationThreshold,
-            uint256 ltv,
-            uint256 healthFactor
-        ) = aavePool.getUserAccountData(address(this));
+    function _rebalancePosition() internal {
+        bytes32[] memory priceFeedIds = new bytes32[](3);
+        priceFeedIds[0] = cbEthUsdPriceFeedId;
+        priceFeedIds[1] = usdcUsdPriceFeedId;
+        priceFeedIds[2] = aeroUsdPriceFeedId;
+        uint256[] memory prices = getPricePyth(priceFeedIds);
+        uint256 cbEthPriceInUsd = prices[0];
+        uint256 usdcPriceInUsd = prices[1];
+        uint256 aeroPriceInUsd = prices[2];
 
-        return healthFactor;
-    }
-
-    function getMaxWithdrawableAmount() internal view returns (uint256) {
-        address assetAddress = asset();
-        (
-            uint256 currentATokenBalance,
-            uint256 currentStableDebt,
-            uint256 currentVariableDebt,
-            uint256 principalStableDebt,
-            uint256 scaledVariableDebt,
-            uint256 stableBorrowRate,
-            uint256 liquidityRate,
-            uint40 stableRateLastUpdated,
-            bool usageAsCollateralEnabled
-        ) = aaveProtocolDataProvider.getUserReserveData(
-                assetAddress,
-                address(this)
-            );
-
-        // The maximum withdrawable amount is the current aToken balance
-        return currentATokenBalance;
-    }
-
-    function rebalancePosition() internal {
         (
             uint256 totalCollateralBase,
             uint256 totalDebtBase,
             ,
             uint256 currentLiquidationThreshold,
             ,
-            uint256 currentHealthFactor
+
         ) = aavePool.getUserAccountData(address(this));
 
-        // Convert currentHealthFactor to 4 decimal places for comparison
-        uint256 currentHealthFactor4Dec = currentHealthFactor / 1e14;
+        uint256 bufferedTargetHealthFactor = TARGET_HEALTH_FACTOR +
+            HEALTH_FACTOR_BUFFER;
 
-        if (currentHealthFactor4Dec >= TARGET_HEALTH_FACTOR) {
-            return; // No need to rebalance
-        }
-
-        // Calculate the amount of debt to repay to reach the target health factor
         uint256 debtToRepay = totalDebtBase -
             (totalCollateralBase * currentLiquidationThreshold) /
-            TARGET_HEALTH_FACTOR;
+            bufferedTargetHealthFactor;
 
         // Convert debtToRepay from base units (USD with 8 decimals) to cbETH (18 decimals)
-        uint256 cbEthPriceInUsd = getPricePyth([cbEthUsdPriceFeedId])[0];
         uint256 cbEthToRepay = (debtToRepay * 1e18) / cbEthPriceInUsd;
 
         // Calculate how much to withdraw from Aerodrome Pool
-        uint256 lpTokensToBurn = _calculateLPTokensToWithdraw(cbEthToRepay);
-        (uint256 usdc, uint256 aero) = aerodromePool.burn(lpTokensToBurn);
-
-        // Swap AERO to USDC
-        if (aero > 0) {
-            usdc += _swapAEROToUSDC(aero);
-        }
+        uint256 lpTokensToBurn = _calculateLPTokensToWithdraw(
+            debtToRepay,
+            usdcPriceInUsd,
+            aeroPriceInUsd
+        );
+        IERC20(address(aerodromePool)).transfer(
+            address(aerodromePool),
+            lpTokensToBurn
+        );
+        (uint256 usdc, uint256 aero) = aerodromePool.burn(address(this));
 
         // Swap USDC to cbETH
-        uint256 cbEthReceived = _swapUSDCToCbETH(usdc);
+        uint256 cbEthReceived = _swapUSDCAndAEROToCbETH(usdc, aero);
 
         // Repay cbETH debt
         IERC20(cbETH).approve(address(aavePool), cbEthReceived);
         aavePool.repay(cbETH, cbEthReceived, 2, address(this));
-
-        // Check if we've reached the target health factor, if not, consider supplying more collateral
-        uint256 newHealthFactor = calculateHealthFactor();
-        if (newHealthFactor < TARGET_HEALTH_FACTOR * 1e14) {
-            // Consider supplying more collateral here if needed
-        }
     }
 
-    function _calculateLPTokensToWithdraw(
-        uint256 cbEthAmount
-    ) internal view returns (uint256) {
-        uint256 totalLPBalance = IERC20(address(aerodromePool)).balanceOf(
+    function calculateHealthFactor() internal view returns (uint256) {
+        (, , , , , uint256 healthFactor) = aavePool.getUserAccountData(
             address(this)
         );
 
-        // Convert cbETH amount to USD value
-        uint256 cbEthPriceInUsd = getPricePyth([cbEthUsdPriceFeedId])[0];
-        uint256 cbEthValueInUsd = (cbEthAmount * cbEthPriceInUsd) / 1e18;
+        return healthFactor;
+    }
 
-        // Adjust for 8 decimal places in base currency
-        uint256 cbEthValueInBase = cbEthValueInUsd / 1e10;
+    function checkAndRebalance() external payable onlyRole(REBALANCER_ROLE) {
+        uint256 healthFactor = calculateHealthFactor();
+        uint256 currentHealthFactor4Dec = healthFactor / 1e14;
+        uint256 bufferedTargetHealthFactor = TARGET_HEALTH_FACTOR +
+            HEALTH_FACTOR_BUFFER;
 
-        return (cbEthValueInBase * totalLPBalance) / _totalAccountedAssets;
+        if (currentHealthFactor4Dec < bufferedTargetHealthFactor) {
+            _rebalancePosition();
+        }
+    }
+
+    // @audit - check the amnount returned by this function in tests
+
+    function _calculateLPTokensToWithdraw(
+        uint256 cbEthValueInUsd,
+        uint256 usdcPriceInUsd,
+        uint256 aeroPriceInUsd
+    ) internal view returns (uint256 sharesToBurn) {
+        (uint256 reserve0, uint256 reserve1, ) = aerodromePool.getReserves();
+        uint256 totalSupplyPoolToken = IERC20(address(aerodromePool))
+            .totalSupply();
+
+        // Calculate desired amounts, dividing by 2 to split equally between USDC and AERO
+        uint256 halfCbEthValueInUsd = cbEthValueInUsd / 2;
+        uint256 desiredUsdc = (halfCbEthValueInUsd * 1e6) / usdcPriceInUsd; // Convert to USDC with 6 decimals
+        uint256 desiredAero = (halfCbEthValueInUsd * 1e18) / aeroPriceInUsd; // Convert to AERO with 18 decimals
+
+        // Calculate the amount of LP tokens to burn
+        sharesToBurn = (desiredUsdc * totalSupplyPoolToken) / reserve0;
     }
 
     function harvestReinvestAndReport() external onlyOwner {
@@ -297,7 +294,6 @@ contract VaultStrategy is ERC4626, Ownable {
             .balanceOf(address(this));
 
         // Calculate the change in balances
-
         uint256 borrowedCbETHChange = currentVariableDebtBalance -
             previousVariableDebtBalance;
 
@@ -411,6 +407,23 @@ contract VaultStrategy is ERC4626, Ownable {
         return (amountOutUSDC, amountOutAERO);
     }
 
+    function _swapUSDCAndAEROToCbETH(
+        uint256 amountInUSDC,
+        uint256 amountInAERO
+    ) internal returns (uint256) {
+        address assetAddress = asset();
+        // Swap USDC to cbETH
+        uint256 amountOutcbETH1 = _swap(
+            assetAddress,
+            cbETH,
+            500,
+            500,
+            amountInUSDC
+        );
+        uint256 amountOutcbETH2 = _swap(AERO, cbETH, 3000, 500, amountInAERO);
+        return amountOutcbETH1 + amountOutcbETH2;
+    }
+
     function _swapAEROToUSDC(
         uint256 amountIn
     ) internal returns (uint256 amountOut) {
@@ -422,6 +435,12 @@ contract VaultStrategy is ERC4626, Ownable {
     ) internal returns (uint256 amountOut) {
         amountOut = _swap(asset(), AERO, 500, 3000, amountIn);
     }
+
+    // function _swapUSDCToCbETH(
+    //     uint256 amountIn
+    // ) internal returns (uint256 amountOut) {
+    //     amountOut = _swap(asset(), cbETH, 500, 500, amountIn);
+    // }
 
     function totalAssets() public view override returns (uint256) {
         return _totalAccountedAssets;
@@ -455,6 +474,16 @@ contract VaultStrategy is ERC4626, Ownable {
         }
 
         return prices;
+    }
+
+    // Function to grant the rebalancer role
+    function grantRebalancerRole(address account) external onlyOwner {
+        grantRole(REBALANCER_ROLE, account);
+    }
+
+    // Function to revoke the rebalancer role
+    function revokeRebalancerRole(address account) external onlyOwner {
+        revokeRole(REBALANCER_ROLE, account);
     }
 
     event HarvestReport(
