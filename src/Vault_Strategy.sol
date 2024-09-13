@@ -18,8 +18,14 @@ import {TransferHelper} from "@uniswap/v3-periphery/contracts/libraries/Transfer
 import {IPythPriceUpdater} from "./interfaces/IPythPriceUpdater.sol";
 import {ISwapRouter02, IV3SwapRouter} from "./interfaces/ISwapRouter.sol";
 import {IAaveOracle} from "./interfaces/IAaveOracle.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-contract VaultStrategy is ERC4626, Ownable2Step, AccessControl {
+contract VaultStrategy is
+    ERC4626,
+    Ownable2Step,
+    AccessControl,
+    ReentrancyGuard
+{
     using Math for uint256;
     using SafeERC20 for IERC20;
     IPyth pyth;
@@ -116,7 +122,7 @@ contract VaultStrategy is ERC4626, Ownable2Step, AccessControl {
         emit Deposit(caller, receiver, assets, shares);
     }
 
-    function _withdrawFunds(uint256 amount) internal {
+    function _withdrawFunds(uint256 amount) internal nonReentrant {
         uint256 maxWithdrawable = getMaxWithdrawableAmount();
 
         if (amount <= maxWithdrawable) {
@@ -338,7 +344,7 @@ contract VaultStrategy is ERC4626, Ownable2Step, AccessControl {
         sharesToBurn = (desiredUsdc * totalSupplyPoolToken) / reserve0;
     }
 
-    function harvestReinvestAndReport() external onlyOwner {
+    function harvestReinvestAndReport() external onlyOwner nonReentrant {
         // Get prices from Pyth Network
         bytes32[] memory priceFeedIds = new bytes32[](3);
         priceFeedIds[0] = cbEthUsdPriceFeedId;
@@ -446,7 +452,7 @@ contract VaultStrategy is ERC4626, Ownable2Step, AccessControl {
         );
     }
 
-    function claimStrategistFees(uint256 amount) external {
+    function claimStrategistFees(uint256 amount) external nonReentrant {
         require(msg.sender == strategist, "Only strategist can claim fees");
         require(
             accumulatedStrategistFee > 0 && amount < accumulatedStrategistFee,
@@ -639,4 +645,38 @@ contract VaultStrategy is ERC4626, Ownable2Step, AccessControl {
     );
 
     event StrategistFeeClaimed(uint256 claimedAmount, uint256 remainingFees);
+
+    // Override the deposit function to include the nonReentrant modifier
+    function deposit(
+        uint256 assets,
+        address receiver
+    ) public virtual override nonReentrant returns (uint256) {
+        return super.deposit(assets, receiver);
+    }
+
+    // Override the mint function to include the nonReentrant modifier
+    function mint(
+        uint256 shares,
+        address receiver
+    ) public virtual override nonReentrant returns (uint256) {
+        return super.mint(shares, receiver);
+    }
+
+    // Override the withdraw function to include the nonReentrant modifier
+    function withdraw(
+        uint256 assets,
+        address receiver,
+        address owner
+    ) public virtual override nonReentrant returns (uint256) {
+        return super.withdraw(assets, receiver, owner);
+    }
+
+    // Override the redeem function to include the nonReentrant modifier
+    function redeem(
+        uint256 shares,
+        address receiver,
+        address owner
+    ) public virtual override nonReentrant returns (uint256) {
+        return super.redeem(shares, receiver, owner);
+    }
 }
