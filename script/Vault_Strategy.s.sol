@@ -24,6 +24,8 @@ contract Vault_StrategyScript is Script {
         address aaveProtocolDataProviderContract = 0x793177a6Cf520C7fE5B2E45660EBB48132184BBC;
         address aerodromePoolContract = 0x6cDcb1C4A4D1C3C6d054b27AC5B77e89eAFb971d; // mainnet
         address pythPriceUpdaterContract = 0x4896bB51d19A7c7a69e48732580FB628903086eF;
+        address aaveOracleContract = 0x2Cc0Fc26eD4563A5ce5e8bdcfe1A2878676Ae156;
+        address strategist = 0x07a721260416e764618B059811eaf099a940Af14;
         // Approve the transfer of initial deposit
 
         vault_strategy = new VaultStrategy(
@@ -36,7 +38,9 @@ contract Vault_StrategyScript is Script {
             aavePoolContract,
             aaveProtocolDataProviderContract,
             aerodromePoolContract,
-            pythPriceUpdaterContract
+            pythPriceUpdaterContract,
+            aaveOracleContract,
+            strategist
         );
 
         vm.stopBroadcast();

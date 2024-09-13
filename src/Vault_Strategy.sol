@@ -17,13 +17,14 @@ import {PythStructs} from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 import {TransferHelper} from "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
 import {IPythPriceUpdater} from "./interfaces/IPythPriceUpdater.sol";
 import {ISwapRouter02, IV3SwapRouter} from "./interfaces/ISwapRouter.sol";
-// import {DataTypes} from "./interfaces/DataTypes.sol";
+import {IAaveOracle} from "./interfaces/IAaveOracle.sol";
 
 contract VaultStrategy is ERC4626, Ownable2Step, AccessControl {
     using Math for uint256;
     using SafeERC20 for IERC20;
     IPyth pyth;
     IPoolAave aavePool;
+    IAaveOracle aaveOracle;
     IPoolDataProvider aaveProtocolDataProvider;
     IPoolAerodrome aerodromePool;
     IPythPriceUpdater public pythPriceUpdater;
@@ -55,6 +56,11 @@ contract VaultStrategy is ERC4626, Ownable2Step, AccessControl {
 
     bytes32 public constant REBALANCER_ROLE = keccak256("REBALANCER_ROLE");
 
+    // Add strategist address and fee percentage
+    address public strategist;
+    uint256 public accumulatedStrategistFee;
+    uint256 public constant STRATEGIST_FEE_PERCENTAGE = 2000; // 20% with 2 decimal places
+
     constructor(
         IERC20 asset_,
         uint256 _initialDeposit,
@@ -65,7 +71,9 @@ contract VaultStrategy is ERC4626, Ownable2Step, AccessControl {
         address aavePoolContract,
         address aaveProtocolDataProviderContract,
         address aerodromePoolContract,
-        address pythPriceUpdaterContract
+        address pythPriceUpdaterContract,
+        address aaveOracleContract,
+        address _strategist
     ) ERC4626(asset_) ERC20(name_, symbol_) Ownable(initialOwner) {
         _grantRole(DEFAULT_ADMIN_ROLE, initialOwner);
         _grantRole(REBALANCER_ROLE, initialOwner);
@@ -79,6 +87,8 @@ contract VaultStrategy is ERC4626, Ownable2Step, AccessControl {
         aerodromePool = IPoolAerodrome(aerodromePoolContract);
         pythPriceUpdater = IPythPriceUpdater(pythPriceUpdaterContract);
         swapRouter = ISwapRouter02(swapRouterAddress);
+        aaveOracle = IAaveOracle(aaveOracleContract);
+        strategist = _strategist;
     }
 
     // New internal function that includes priceUpdate
@@ -106,27 +116,42 @@ contract VaultStrategy is ERC4626, Ownable2Step, AccessControl {
         emit Deposit(caller, receiver, assets, shares);
     }
 
-    function _withdraw(
-        address caller,
-        address receiver,
-        address _owner,
-        uint256 assets,
-        uint256 shares
-    ) internal override {
-        if (caller != _owner) {
-            _spendAllowance(_owner, caller, shares);
+    function _withdrawFunds(uint256 amount) internal {
+        uint256 maxWithdrawable = getMaxWithdrawableAmount();
+
+        if (amount <= maxWithdrawable) {
+            // Normal flow for amounts within maxWithdrawable
+            aavePool.withdraw(asset(), amount, address(this));
+
+            // Check and rebalance if necessary
+            uint256 healthFactor = calculateHealthFactor();
+            uint256 currentHealthFactor4Dec = healthFactor / 1e14;
+            uint256 bufferedTargetHealthFactor = TARGET_HEALTH_FACTOR +
+                HEALTH_FACTOR_BUFFER;
+
+            if (currentHealthFactor4Dec < bufferedTargetHealthFactor) {
+                _rebalancePosition(0);
+            }
+        } else {
+            // Handle case where amount exceeds maxWithdrawable
+            aavePool.withdraw(asset(), maxWithdrawable, address(this));
+
+            uint256 additionalAmountNeeded = amount - maxWithdrawable;
+            _rebalancePosition(additionalAmountNeeded);
+
+            // After rebalancing, try to withdraw any remaining amount
+            uint256 newMaxWithdrawable = getMaxWithdrawableAmount();
+            uint256 remainingWithdrawal = Math.min(
+                additionalAmountNeeded,
+                newMaxWithdrawable
+            );
+            if (remainingWithdrawal > 0) {
+                aavePool.withdraw(asset(), remainingWithdrawal, address(this));
+            }
         }
 
-        // Burn shares from _owner
-        _burn(_owner, shares);
-
-        // Withdraw funds
-        _withdrawFunds(assets);
-
-        // Transfer assets to receiver
-        SafeERC20.safeTransfer(IERC20(asset()), receiver, assets);
-
-        emit Withdraw(caller, receiver, _owner, assets, shares);
+        // Update total accounted assets
+        _totalAccountedAssets -= amount;
     }
 
     function _investFunds(uint256 amount, address assetAddress) internal {
@@ -171,25 +196,7 @@ contract VaultStrategy is ERC4626, Ownable2Step, AccessControl {
         _totalAccountedAssets += amount;
     }
 
-    function _withdrawFunds(uint256 amount) internal {
-        // First, withdraw the requested amount
-        aavePool.withdraw(asset(), amount, address(this));
-
-        // Check and rebalance if necessary
-        uint256 healthFactor = calculateHealthFactor();
-        uint256 currentHealthFactor4Dec = healthFactor / 1e14;
-        uint256 bufferedTargetHealthFactor = TARGET_HEALTH_FACTOR +
-            HEALTH_FACTOR_BUFFER;
-
-        if (currentHealthFactor4Dec < bufferedTargetHealthFactor) {
-            _rebalancePosition();
-        }
-
-        // Update total accounted assets
-        _totalAccountedAssets -= amount;
-    }
-
-    function _rebalancePosition() internal {
+    function _rebalancePosition(uint256 additionalAmountNeeded) internal {
         bytes32[] memory priceFeedIds = new bytes32[](3);
         priceFeedIds[0] = cbEthUsdPriceFeedId;
         priceFeedIds[1] = usdcUsdPriceFeedId;
@@ -199,38 +206,48 @@ contract VaultStrategy is ERC4626, Ownable2Step, AccessControl {
         uint256 usdcPriceInUsd = prices[1];
         uint256 aeroPriceInUsd = prices[2];
 
-        (
-            uint256 totalCollateralBase,
-            uint256 totalDebtBase,
-            ,
-            uint256 currentLiquidationThreshold,
-            ,
+        uint256 amountToFreeUp = additionalAmountNeeded > 0
+            ? additionalAmountNeeded
+            : 0;
 
-        ) = aavePool.getUserAccountData(address(this));
+        if (amountToFreeUp == 0) {
+            // Original rebalancing logic
+            (
+                uint256 totalCollateralBase,
+                uint256 totalDebtBase,
+                ,
+                uint256 currentLiquidationThreshold,
+                ,
 
-        uint256 bufferedTargetHealthFactor = TARGET_HEALTH_FACTOR +
-            HEALTH_FACTOR_BUFFER;
+            ) = aavePool.getUserAccountData(address(this));
 
-        uint256 debtToRepay = totalDebtBase -
-            (totalCollateralBase * currentLiquidationThreshold) /
-            bufferedTargetHealthFactor;
+            uint256 bufferedTargetHealthFactor = TARGET_HEALTH_FACTOR +
+                HEALTH_FACTOR_BUFFER;
 
-        // Convert debtToRepay from base units (USD with 8 decimals) to cbETH (18 decimals)
-        uint256 cbEthToRepay = (debtToRepay * 1e18) / cbEthPriceInUsd;
+            amountToFreeUp =
+                totalDebtBase -
+                (totalCollateralBase * currentLiquidationThreshold) /
+                bufferedTargetHealthFactor;
+        }
+
+        // Convert amountToFreeUp from USDC to cbETH
+        uint256 cbEthEquivalent = (amountToFreeUp * 1e18 * usdcPriceInUsd) /
+            (cbEthPriceInUsd * 1e6);
 
         // Calculate how much to withdraw from Aerodrome Pool
         uint256 lpTokensToBurn = _calculateLPTokensToWithdraw(
-            debtToRepay,
+            cbEthEquivalent,
             usdcPriceInUsd,
             aeroPriceInUsd
         );
+
         IERC20(address(aerodromePool)).transfer(
             address(aerodromePool),
             lpTokensToBurn
         );
         (uint256 usdc, uint256 aero) = aerodromePool.burn(address(this));
 
-        // Swap USDC to cbETH
+        // Swap USDC and AERO to cbETH
         uint256 cbEthReceived = _swapUSDCAndAEROToCbETH(usdc, aero);
 
         // Repay cbETH debt
@@ -251,9 +268,53 @@ contract VaultStrategy is ERC4626, Ownable2Step, AccessControl {
         uint256 currentHealthFactor4Dec = healthFactor / 1e14;
         uint256 bufferedTargetHealthFactor = TARGET_HEALTH_FACTOR +
             HEALTH_FACTOR_BUFFER;
+        uint256 maxHealthFactor = TARGET_HEALTH_FACTOR * 2; // Example: 2.2 (twice the target)
 
         if (currentHealthFactor4Dec < bufferedTargetHealthFactor) {
-            _rebalancePosition();
+            _rebalancePosition(0);
+        } else if (currentHealthFactor4Dec > maxHealthFactor) {
+            _investIdleFunds();
+        }
+    }
+
+    function _investIdleFunds() internal {
+        (
+            uint256 totalCollateralBase,
+            uint256 totalDebtBase,
+            ,
+            uint256 currentLtv,
+            ,
+
+        ) = aavePool.getUserAccountData(address(this));
+
+        uint256 targetDebtBase = (totalCollateralBase * currentLtv) / 10000;
+        uint256 additionalBorrowBase = targetDebtBase - totalDebtBase;
+
+        if (additionalBorrowBase > 0) {
+            bytes32[] memory priceFeedIds = new bytes32[](2);
+            priceFeedIds[0] = usdcUsdPriceFeedId;
+            priceFeedIds[1] = cbEthUsdPriceFeedId;
+            uint256[] memory prices = getPricePyth(priceFeedIds);
+            uint256 usdcPriceInUSD = prices[0];
+            uint256 cbEthPriceInUSD = prices[1];
+
+            uint256 cbEthToBorrow = (additionalBorrowBase * usdcPriceInUSD) /
+                cbEthPriceInUSD;
+            uint256 safeAmount = (cbEthToBorrow * 95) / 100;
+
+            aavePool.borrow(cbETH, safeAmount, 2, 0, address(this));
+            uint256 cbEthBalance = IERC20(cbETH).balanceOf(address(this));
+            (
+                uint256 usdcReceived,
+                uint256 aeroReceived
+            ) = _swapcbETHToUSDCAndAERO(cbEthBalance);
+
+            IERC20(asset()).safeTransfer(address(aerodromePool), usdcReceived);
+            IERC20(AERO).safeTransfer(address(aerodromePool), aeroReceived);
+            aerodromePool.mint(address(this));
+            aerodromePool.skim(address(this));
+
+            _totalAccountedAssets += usdcReceived;
         }
     }
 
@@ -264,14 +325,14 @@ contract VaultStrategy is ERC4626, Ownable2Step, AccessControl {
         uint256 usdcPriceInUsd,
         uint256 aeroPriceInUsd
     ) internal view returns (uint256 sharesToBurn) {
-        (uint256 reserve0, uint256 reserve1, ) = aerodromePool.getReserves();
+        (uint256 reserve0, , ) = aerodromePool.getReserves();
         uint256 totalSupplyPoolToken = IERC20(address(aerodromePool))
             .totalSupply();
 
         // Calculate desired amounts, dividing by 2 to split equally between USDC and AERO
         uint256 halfCbEthValueInUsd = cbEthValueInUsd / 2;
         uint256 desiredUsdc = (halfCbEthValueInUsd * 1e6) / usdcPriceInUsd; // Convert to USDC with 6 decimals
-        uint256 desiredAero = (halfCbEthValueInUsd * 1e18) / aeroPriceInUsd; // Convert to AERO with 18 decimals
+        // uint256 desiredAero = (halfCbEthValueInUsd * 1e18) / aeroPriceInUsd; // Convert to AERO with 18 decimals
 
         // Calculate the amount of LP tokens to burn
         sharesToBurn = (desiredUsdc * totalSupplyPoolToken) / reserve0;
@@ -328,21 +389,6 @@ contract VaultStrategy is ERC4626, Ownable2Step, AccessControl {
             currentUSDCBalance += _swapAEROToUSDC(currentAeroBalance);
         }
 
-        // Reinvest in Aerodrome Pool
-        if (currentUSDCBalance > 0) {
-            uint256 aeroAmount = _swapUSDCToAERO(currentUSDCBalance / 2);
-
-            IERC20(AERO).safeTransfer(address(aerodromePool), aeroAmount);
-            IERC20(asset()).safeTransfer(
-                address(aerodromePool),
-                currentUSDCBalance / 2
-            );
-            aerodromePool.mint(address(this));
-        }
-
-        // Skim any excess assets from Aerodrome Pool
-        aerodromePool.skim(address(this));
-
         // Calculate total rewards in USDC
         uint256 finalAeroBalance = IERC20(AERO).balanceOf(address(this));
         uint256 finalUsdcBalance = IERC20(asset()).balanceOf(address(this));
@@ -350,20 +396,82 @@ contract VaultStrategy is ERC4626, Ownable2Step, AccessControl {
             ((aeroPriceInUSD * (finalAeroBalance - initialAeroBalance)) /
                 (usdcPrice * 10 ** 12));
 
-        // Update total accounted assets
-        if (aaveNetGain > 0) {
-            _totalAccountedAssets += uint256(aaveNetGain);
-        } else {
-            _totalAccountedAssets -= uint256(-aaveNetGain);
+        // Calculate total profit, including Aerodrome rewards and Aave net gain
+        int256 totalProfit = int256(totalRewardsInUSDC) + aaveNetGain;
+
+        // Only apply fee if there's a positive profit
+        uint256 strategistFee = 0;
+        if (totalProfit > 0) {
+            strategistFee =
+                (uint256(totalProfit) * STRATEGIST_FEE_PERCENTAGE) /
+                10000;
+            accumulatedStrategistFee += strategistFee;
         }
-        _totalAccountedAssets += totalRewardsInUSDC;
+
+        // Calculate net profit after fee
+        uint256 netProfit = totalProfit > 0
+            ? uint256(totalProfit) - strategistFee
+            : 0;
+
+        // Update total accounted assets
+        if (totalProfit > 0) {
+            _totalAccountedAssets += netProfit;
+        } else if (totalProfit < 0) {
+            _totalAccountedAssets -= uint256(-totalProfit);
+        }
+
+        // Reinvest all rewards in Aerodrome Pool
+        if (totalRewardsInUSDC > 0) {
+            uint256 aeroAmount = _swapUSDCToAERO(totalRewardsInUSDC / 2);
+
+            IERC20(AERO).safeTransfer(address(aerodromePool), aeroAmount);
+            IERC20(asset()).safeTransfer(
+                address(aerodromePool),
+                totalRewardsInUSDC / 2
+            );
+            aerodromePool.mint(address(this));
+        }
+
+        // Skim any excess assets from Aerodrome Pool
+        aerodromePool.skim(address(this));
 
         emit HarvestReport(
+            uint256(totalProfit),
+            netProfit,
+            strategistFee,
             totalRewardsInUSDC,
             aaveNetGain,
             claimedAero,
             claimedUsdc
         );
+    }
+
+    function claimStrategistFees(uint256 amount) external {
+        require(msg.sender == strategist, "Only strategist can claim fees");
+        require(
+            accumulatedStrategistFee > 0 && amount < accumulatedStrategistFee,
+            "No fees to claim"
+        );
+
+        (uint256 reserve0, , ) = aerodromePool.getReserves();
+        uint256 totalSupplyPoolToken = IERC20(address(aerodromePool))
+            .totalSupply();
+
+        uint256 sharesToBurn = (amount * totalSupplyPoolToken) / reserve0;
+
+        IERC20(address(aerodromePool)).transfer(
+            address(aerodromePool),
+            sharesToBurn
+        );
+        (uint256 usdc, uint256 aero) = aerodromePool.burn(address(this));
+
+        uint256 usdcAmount = _swapAEROToUSDC(aero) + usdc;
+
+        IERC20(asset()).safeTransfer(strategist, usdcAmount);
+
+        accumulatedStrategistFee -= amount;
+
+        // emit StrategistFeeClaimed(, accumulatedStrategistFee);
     }
 
     function _swap(
@@ -486,10 +594,49 @@ contract VaultStrategy is ERC4626, Ownable2Step, AccessControl {
         revokeRole(REBALANCER_ROLE, account);
     }
 
+    function getMaxWithdrawableAmount() public view returns (uint256) {
+        // Get the available (unborrowed) liquidity
+        uint256 availableLiquidity = IERC20(aUSDC).balanceOf(address(asset()));
+
+        (
+            uint256 totalCollateralBase,
+            uint256 totalDebtBase,
+            ,
+            uint256 currentLiquidationThreshold,
+            ,
+
+        ) = aavePool.getUserAccountData(address(this));
+
+        // Calculate the maximum amount that can be withdrawn without risking liquidation
+        uint256 maxWithdrawBase = totalCollateralBase -
+            ((totalDebtBase * 10000) / currentLiquidationThreshold);
+
+        // Get the price feed from AaveOracle
+        uint256 usdcPriceInUSD = aaveOracle.getAssetPrice(address(asset()));
+
+        // Convert maxWithdrawBase to USDC
+        // maxWithdrawBase is in ETH with 18 decimals, usdcPriceInUSD is in USD with 8 decimals
+        // We want the result in USDC with 6 decimals
+        uint256 maxWithdrawAsset = (maxWithdrawBase * 1e6) / usdcPriceInUSD;
+
+        // Return the minimum of availableLiquidity and maxWithdrawAsset
+        return Math.min(availableLiquidity, maxWithdrawAsset);
+    }
+
+    // Function to set the strategist address
+    function setStrategist(address _strategist) external onlyOwner {
+        strategist = _strategist;
+    }
+
     event HarvestReport(
-        uint256 totalRewardsInUSDC,
+        uint256 totalProfit,
+        uint256 netProfit,
+        uint256 strategistFee,
+        uint256 aerodromeRewards,
         int256 aaveNetGain,
         uint256 claimedAero,
         uint256 claimedUsdc
     );
+
+    event StrategistFeeClaimed(uint256 claimedAmount, uint256 remainingFees);
 }
