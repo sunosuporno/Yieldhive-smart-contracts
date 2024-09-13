@@ -67,6 +67,9 @@ contract VaultStrategy is
     uint256 public accumulatedStrategistFee;
     uint256 public constant STRATEGIST_FEE_PERCENTAGE = 2000; // 20% with 2 decimal places
 
+    // Add this state variable
+    uint256 public accumulatedDeposits;
+
     constructor(
         IERC20 asset_,
         uint256 _initialDeposit,
@@ -116,8 +119,8 @@ contract VaultStrategy is
         // Mint shares to the receiver
         _mint(receiver, shares);
 
-        // Call the internal function to invest the funds
-        _investFunds(assets, assetAddress);
+        // Accumulate deposits instead of investing
+        accumulatedDeposits += assets;
 
         emit Deposit(caller, receiver, assets, shares);
     }
@@ -379,13 +382,15 @@ contract VaultStrategy is
 
         // Get initial balances
         uint256 initialAeroBalance = IERC20(AERO).balanceOf(address(this));
-        uint256 initialUsdcBalance = IERC20(asset()).balanceOf(address(this));
+        uint256 initialUsdcBalance = IERC20(asset()).balanceOf(address(this)) -
+            accumulatedDeposits;
 
         // Claim fees from Aerodrome Pool
         aerodromePool.claimFees();
 
         uint256 currentAeroBalance = IERC20(AERO).balanceOf(address(this));
-        uint256 currentUSDCBalance = IERC20(asset()).balanceOf(address(this));
+        uint256 currentUSDCBalance = IERC20(asset()).balanceOf(address(this)) -
+            accumulatedDeposits;
 
         // Calculate claimed rewards
         uint256 claimedAero = currentAeroBalance - initialAeroBalance;
@@ -678,5 +683,15 @@ contract VaultStrategy is
         address owner
     ) public virtual override nonReentrant returns (uint256) {
         return super.redeem(shares, receiver, owner);
+    }
+
+    // Add a new function to invest accumulated funds
+    function investAccumulatedFunds() external onlyOwner nonReentrant {
+        require(accumulatedDeposits > 0, "No accumulated deposits to invest");
+
+        uint256 amountToInvest = accumulatedDeposits;
+        accumulatedDeposits = 0;
+
+        _investFunds(amountToInvest, asset());
     }
 }
