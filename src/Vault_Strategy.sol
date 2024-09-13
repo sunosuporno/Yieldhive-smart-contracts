@@ -19,6 +19,7 @@ import {IPythPriceUpdater} from "./interfaces/IPythPriceUpdater.sol";
 import {ISwapRouter02, IV3SwapRouter} from "./interfaces/ISwapRouter.sol";
 import {IAaveOracle} from "./interfaces/IAaveOracle.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 contract VaultStrategy is
     ERC4626,
@@ -28,6 +29,17 @@ contract VaultStrategy is
 {
     using Math for uint256;
     using SafeERC20 for IERC20;
+    using EnumerableSet for EnumerableSet.AddressSet;
+
+    struct WithdrawalRequest {
+        uint256 shares;
+        uint256 assets;
+        bool fulfilled;
+    }
+
+    mapping(address => WithdrawalRequest) public withdrawalRequests;
+    EnumerableSet.AddressSet private withdrawalRequestors;
+
     IPyth pyth;
     IPoolAave aavePool;
     IAaveOracle aaveOracle;
@@ -402,7 +414,8 @@ contract VaultStrategy is
 
         // Calculate total rewards in USDC
         uint256 finalAeroBalance = IERC20(AERO).balanceOf(address(this));
-        uint256 finalUsdcBalance = IERC20(asset()).balanceOf(address(this));
+        uint256 finalUsdcBalance = IERC20(asset()).balanceOf(address(this)) -
+            accumulatedDeposits;
         uint256 totalRewardsInUSDC = (finalUsdcBalance - initialUsdcBalance) +
             ((aeroPriceInUSD * (finalAeroBalance - initialAeroBalance)) /
                 (usdcPrice * 10 ** 12));
@@ -672,8 +685,13 @@ contract VaultStrategy is
         uint256 assets,
         address receiver,
         address owner
-    ) public virtual override nonReentrant returns (uint256) {
-        return super.withdraw(assets, receiver, owner);
+    ) public virtual override nonReentrant returns (uint256 shares) {
+        require(assets > 0, "Cannot withdraw 0 assets");
+        shares = previewWithdraw(assets);
+
+        _withdraw(_msgSender(), receiver, owner, assets, shares);
+
+        return shares;
     }
 
     // Override the redeem function to include the nonReentrant modifier
@@ -681,8 +699,13 @@ contract VaultStrategy is
         uint256 shares,
         address receiver,
         address owner
-    ) public virtual override nonReentrant returns (uint256) {
-        return super.redeem(shares, receiver, owner);
+    ) public virtual override nonReentrant returns (uint256 assets) {
+        require(shares > 0, "Cannot redeem 0 shares");
+        assets = previewRedeem(shares);
+
+        _withdraw(_msgSender(), receiver, owner, assets, shares);
+
+        return assets;
     }
 
     // Add a new function to invest accumulated funds
@@ -693,5 +716,93 @@ contract VaultStrategy is
         accumulatedDeposits = 0;
 
         _investFunds(amountToInvest, asset());
+    }
+
+    function processWithdrawalRequests() external onlyOwner nonReentrant {
+        uint256 totalAssetsToWithdraw = 0;
+        uint256 availableAssets = 0;
+
+        // Calculate total assets to withdraw
+        for (uint256 i = 0; i < withdrawalRequestors.length(); i++) {
+            address requestor = withdrawalRequestors.at(i);
+            WithdrawalRequest storage request = withdrawalRequests[requestor];
+
+            if (!request.fulfilled) {
+                totalAssetsToWithdraw += request.assets;
+            }
+        }
+
+        // Withdraw funds if needed
+        if (totalAssetsToWithdraw > 0) {
+            _withdrawFunds(totalAssetsToWithdraw);
+            availableAssets =
+                IERC20(asset()).balanceOf(address(this)) -
+                accumulatedDeposits;
+        }
+
+        uint256 j = 0;
+        while (
+            j < withdrawalRequestors.length() &&
+            totalAssetsToWithdraw > 0 &&
+            availableAssets > 0
+        ) {
+            address requestor = withdrawalRequestors.at(j);
+            WithdrawalRequest storage request = withdrawalRequests[requestor];
+
+            if (!request.fulfilled) {
+                uint256 toDistribute = Math.min(
+                    request.assets,
+                    Math.min(totalAssetsToWithdraw, availableAssets)
+                );
+
+                availableAssets -= toDistribute;
+                totalAssetsToWithdraw -= toDistribute;
+                IERC20(asset()).safeTransfer(requestor, toDistribute);
+                if (toDistribute == request.assets) {
+                    request.fulfilled = true;
+                    withdrawalRequestors.remove(requestor);
+                    // Don't increment i as we've removed an element
+                } else {
+                    request.assets -= toDistribute;
+                    j++;
+                }
+            } else {
+                j++;
+            }
+        }
+    }
+
+    /**
+     * @dev Override the internal _withdraw function from ERC4626
+     */
+    function _withdraw(
+        address caller,
+        address receiver,
+        address owner,
+        uint256 assets,
+        uint256 shares
+    ) internal virtual override {
+        if (caller != owner) {
+            _spendAllowance(owner, caller, shares);
+        }
+
+        _burn(owner, shares);
+
+        WithdrawalRequest storage existingRequest = withdrawalRequests[owner];
+        if (existingRequest.assets > 0) {
+            // Update existing request
+            existingRequest.assets += assets;
+            existingRequest.shares += shares;
+        } else {
+            // Create new request
+            withdrawalRequests[owner] = WithdrawalRequest({
+                shares: shares,
+                assets: assets,
+                fulfilled: false
+            });
+            withdrawalRequestors.add(owner);
+        }
+
+        emit Withdraw(caller, receiver, owner, assets, shares);
     }
 }
