@@ -4,18 +4,30 @@ pragma solidity ^0.8.26;
 import {Script, console} from "forge-std/Script.sol";
 import {VaultStrategy} from "../src/Vault_Strategy.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
+import {ProxyAdmin} from "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol";
 
 contract Vault_StrategyScript is Script {
-    VaultStrategy public vault_strategy;
+    VaultStrategy public vaultStrategyImplementation;
+    TransparentUpgradeableProxy public proxy;
+    ProxyAdmin public proxyAdmin;
 
     function setUp() public {}
 
     function run() public {
         uint256 deployerPrivateKey = vm.envUint("PRIVATE_KEY");
+        address deployer = vm.addr(deployerPrivateKey);
         vm.startBroadcast(deployerPrivateKey);
 
+        // Deploy the implementation contract
+        vaultStrategyImplementation = new VaultStrategy();
+
+        // Deploy the ProxyAdmin contract with the deployer as the initial owner
+        proxyAdmin = new ProxyAdmin(deployer);
+
+        // Prepare initialization data
         address asset = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
-        uint256 initialDeposit = 100; //
+        uint256 initialDeposit = 100;
         address initialOwner = 0x07a721260416e764618B059811eaf099a940Af14;
         string memory name = "YieldHive Prime USDC";
         string memory symbol = "ypUSDC";
@@ -26,9 +38,9 @@ contract Vault_StrategyScript is Script {
         address pythPriceUpdaterContract = 0x4896bB51d19A7c7a69e48732580FB628903086eF;
         address aaveOracleContract = 0x2Cc0Fc26eD4563A5ce5e8bdcfe1A2878676Ae156;
         address strategist = 0x07a721260416e764618B059811eaf099a940Af14;
-        // Approve the transfer of initial deposit
 
-        vault_strategy = new VaultStrategy(
+        bytes memory initData = abi.encodeWithSelector(
+            VaultStrategy.initialize.selector,
             IERC20(asset),
             initialDeposit,
             initialOwner,
@@ -42,6 +54,21 @@ contract Vault_StrategyScript is Script {
             aaveOracleContract,
             strategist
         );
+
+        // Deploy the TransparentUpgradeableProxy
+        proxy = new TransparentUpgradeableProxy(
+            address(vaultStrategyImplementation),
+            address(proxyAdmin),
+            initData
+        );
+
+        // The proxy address is now the address of your upgradeable VaultStrategy
+        console.log("Upgradeable VaultStrategy deployed at:", address(proxy));
+        console.log(
+            "Implementation address:",
+            address(vaultStrategyImplementation)
+        );
+        console.log("ProxyAdmin address:", address(proxyAdmin));
 
         vm.stopBroadcast();
     }

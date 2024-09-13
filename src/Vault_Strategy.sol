@@ -1,14 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.26;
 
-import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
+import {ERC4626Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
-import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {Ownable2Step} from "@openzeppelin/contracts/access/Ownable2Step.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {Ownable2StepUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
+import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {ERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import {IPool as IPoolAave} from "./interfaces/IPool.sol";
 import {IPool as IPoolAerodrome} from "./interfaces/IPoolAerodrome.sol";
 import {IPoolDataProvider} from "./interfaces/IPoolDataProvider.sol";
@@ -18,14 +17,18 @@ import {TransferHelper} from "@uniswap/v3-periphery/contracts/libraries/Transfer
 import {IPythPriceUpdater} from "./interfaces/IPythPriceUpdater.sol";
 import {ISwapRouter02, IV3SwapRouter} from "./interfaces/ISwapRouter.sol";
 import {IAaveOracle} from "./interfaces/IAaveOracle.sol";
-import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
+import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 
 contract VaultStrategy is
-    ERC4626,
-    Ownable2Step,
-    AccessControl,
-    ReentrancyGuard
+    Initializable,
+    ERC4626Upgradeable,
+    Ownable2StepUpgradeable,
+    AccessControlUpgradeable,
+    ReentrancyGuardUpgradeable,
+    UUPSUpgradeable
 {
     using Math for uint256;
     using SafeERC20 for IERC20;
@@ -46,7 +49,7 @@ contract VaultStrategy is
     IPoolDataProvider aaveProtocolDataProvider;
     IPoolAerodrome aerodromePool;
     IPythPriceUpdater public pythPriceUpdater;
-    ISwapRouter02 public immutable swapRouter;
+    ISwapRouter02 public swapRouter;
 
     address public constant swapRouterAddress =
         0x2626664c2603336E57B271c5C0b26F421741e481;
@@ -82,7 +85,12 @@ contract VaultStrategy is
     // Add this state variable
     uint256 public accumulatedDeposits;
 
-    constructor(
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    function initialize(
         IERC20 asset_,
         uint256 _initialDeposit,
         address initialOwner,
@@ -95,11 +103,17 @@ contract VaultStrategy is
         address pythPriceUpdaterContract,
         address aaveOracleContract,
         address _strategist
-    ) ERC4626(asset_) ERC20(name_, symbol_) Ownable(initialOwner) {
+    ) public initializer {
+        __ERC4626_init(asset_);
+        __ERC20_init(name_, symbol_);
+        __Ownable_init(initialOwner);
+        __AccessControl_init();
+        __ReentrancyGuard_init();
+        __UUPSUpgradeable_init();
+
         _grantRole(DEFAULT_ADMIN_ROLE, initialOwner);
         _grantRole(REBALANCER_ROLE, initialOwner);
 
-        // asset_.safeTransferFrom(msg.sender, address(this), _initialDeposit);
         pyth = IPyth(pythContract);
         aavePool = IPoolAave(aavePoolContract);
         aaveProtocolDataProvider = IPoolDataProvider(
@@ -111,6 +125,10 @@ contract VaultStrategy is
         aaveOracle = IAaveOracle(aaveOracleContract);
         strategist = _strategist;
     }
+
+    function _authorizeUpgrade(
+        address newImplementation
+    ) internal override onlyOwner {}
 
     // New internal function that includes priceUpdate
     function _deposit(
