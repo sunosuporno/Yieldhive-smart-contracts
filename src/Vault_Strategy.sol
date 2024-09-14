@@ -87,6 +87,27 @@ contract VaultStrategy is
     // Add this state variable
     uint256 public accumulatedDeposits;
 
+    event StrategistFeeClaimed(uint256 claimedAmount, uint256 remainingFees);
+
+    event PositionRebalanced(
+        uint256 additionalAmountNeeded,
+        uint256 amountFreedUp,
+        uint256 lpTokensBurned,
+        uint256 usdcReceived,
+        uint256 aeroReceived,
+        uint256 cbEthRepaid
+    );
+
+    event HarvestReport(
+        uint256 totalProfit,
+        uint256 netProfit,
+        uint256 strategistFee,
+        uint256 aerodromeRewards,
+        int256 aaveNetGain,
+        uint256 claimedAero,
+        uint256 claimedUsdc
+    );
+
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
         _disableInitializers();
@@ -295,6 +316,16 @@ contract VaultStrategy is
         // Repay cbETH debt
         IERC20(cbETH).approve(address(aavePool), cbEthReceived);
         aavePool.repay(cbETH, cbEthReceived, 2, address(this));
+
+        // Emit the rebalancing event
+        emit PositionRebalanced(
+            additionalAmountNeeded,
+            amountToFreeUp,
+            lpTokensToBurn,
+            usdc,
+            aero,
+            cbEthReceived
+        );
     }
 
     function calculateHealthFactor() internal view returns (uint256) {
@@ -516,7 +547,7 @@ contract VaultStrategy is
 
         accumulatedStrategistFee -= amount;
 
-        // emit StrategistFeeClaimed(, accumulatedStrategistFee);
+        emit StrategistFeeClaimed(amount, accumulatedStrategistFee);
     }
 
     function _swap(
@@ -710,18 +741,6 @@ contract VaultStrategy is
     function setStrategist(address _strategist) external onlyOwner {
         strategist = _strategist;
     }
-
-    event HarvestReport(
-        uint256 totalProfit,
-        uint256 netProfit,
-        uint256 strategistFee,
-        uint256 aerodromeRewards,
-        int256 aaveNetGain,
-        uint256 claimedAero,
-        uint256 claimedUsdc
-    );
-
-    event StrategistFeeClaimed(uint256 claimedAmount, uint256 remainingFees);
 
     // Override the deposit function to include the nonReentrant modifier
     function deposit(
