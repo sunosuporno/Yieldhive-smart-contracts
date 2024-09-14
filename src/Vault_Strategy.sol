@@ -21,6 +21,7 @@ import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/ut
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
+import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 
 contract VaultStrategy is
     Initializable,
@@ -28,7 +29,8 @@ contract VaultStrategy is
     Ownable2StepUpgradeable,
     AccessControlUpgradeable,
     ReentrancyGuardUpgradeable,
-    UUPSUpgradeable
+    UUPSUpgradeable,
+    PausableUpgradeable
 {
     using Math for uint256;
     using SafeERC20 for IERC20;
@@ -110,6 +112,7 @@ contract VaultStrategy is
         __AccessControl_init();
         __ReentrancyGuard_init();
         __UUPSUpgradeable_init();
+        __Pausable_init();
 
         _grantRole(DEFAULT_ADMIN_ROLE, initialOwner);
         _grantRole(REBALANCER_ROLE, initialOwner);
@@ -686,7 +689,7 @@ contract VaultStrategy is
     function deposit(
         uint256 assets,
         address receiver
-    ) public virtual override nonReentrant returns (uint256) {
+    ) public virtual override nonReentrant whenNotPaused returns (uint256) {
         return super.deposit(assets, receiver);
     }
 
@@ -694,7 +697,7 @@ contract VaultStrategy is
     function mint(
         uint256 shares,
         address receiver
-    ) public virtual override nonReentrant returns (uint256) {
+    ) public virtual override nonReentrant whenNotPaused returns (uint256) {
         return super.mint(shares, receiver);
     }
 
@@ -703,7 +706,14 @@ contract VaultStrategy is
         uint256 assets,
         address receiver,
         address owner
-    ) public virtual override nonReentrant returns (uint256 shares) {
+    )
+        public
+        virtual
+        override
+        nonReentrant
+        whenNotPaused
+        returns (uint256 shares)
+    {
         require(assets > 0, "Cannot withdraw 0 assets");
         shares = previewWithdraw(assets);
 
@@ -717,7 +727,14 @@ contract VaultStrategy is
         uint256 shares,
         address receiver,
         address owner
-    ) public virtual override nonReentrant returns (uint256 assets) {
+    )
+        public
+        virtual
+        override
+        nonReentrant
+        whenNotPaused
+        returns (uint256 assets)
+    {
         require(shares > 0, "Cannot redeem 0 shares");
         assets = previewRedeem(shares);
 
@@ -788,6 +805,15 @@ contract VaultStrategy is
                 j++;
             }
         }
+    }
+
+    // Add pause and unpause functions
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
     }
 
     /**
