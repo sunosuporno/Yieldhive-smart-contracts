@@ -763,20 +763,8 @@ contract VaultStrategy is
         uint256 assets,
         address receiver,
         address owner
-    )
-        public
-        virtual
-        override
-        nonReentrant
-        whenNotPaused
-        returns (uint256 shares)
-    {
-        require(assets > 0, "Cannot withdraw 0 assets");
-        shares = previewWithdraw(assets);
-
-        _withdraw(_msgSender(), receiver, owner, assets, shares);
-
-        return shares;
+    ) public virtual override nonReentrant whenNotPaused returns (uint256) {
+        return super.withdraw(assets, receiver, owner);
     }
 
     // Override the redeem function to include the nonReentrant modifier
@@ -784,20 +772,8 @@ contract VaultStrategy is
         uint256 shares,
         address receiver,
         address owner
-    )
-        public
-        virtual
-        override
-        nonReentrant
-        whenNotPaused
-        returns (uint256 assets)
-    {
-        require(shares > 0, "Cannot redeem 0 shares");
-        assets = previewRedeem(shares);
-
-        _withdraw(_msgSender(), receiver, owner, assets, shares);
-
-        return assets;
+    ) public virtual override nonReentrant whenNotPaused returns (uint256) {
+        return super.redeem(shares, receiver, owner);
     }
 
     // Add a new function to invest accumulated funds
