@@ -6,7 +6,7 @@ import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Ownable2StepUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Ownable2StepUpgradeable.sol";
 import {AccessControlUpgradeable} from "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IERC20, IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {ERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
 import {IPool as IPoolAave} from "./interfaces/IPool.sol";
 import {IPool as IPoolAerodrome} from "./interfaces/IPoolAerodrome.sol";
@@ -528,6 +528,32 @@ contract VaultStrategy is
     ) internal returns (uint256 amountOut) {
         TransferHelper.safeApprove(tokenIn, address(swapRouter), amountIn);
 
+        // Get price feed IDs for both input and output tokens
+        bytes32 inPriceFeedId = getPriceFeedId(tokenIn);
+        bytes32 outPriceFeedId = getPriceFeedId(tokenOut);
+
+        bytes32[] memory priceFeedIds = new bytes32[](2);
+        priceFeedIds[0] = inPriceFeedId;
+        priceFeedIds[1] = outPriceFeedId;
+        uint256[] memory prices = getPricePyth(priceFeedIds);
+        uint256 inPrice = prices[0];
+        uint256 outPrice = prices[1];
+
+        // Calculate the expected amount out
+        uint256 expectedAmountOut = (amountIn * inPrice) / outPrice;
+
+        // Adjust for decimal differences if necessary
+        uint256 inDecimals = IERC20Metadata(tokenIn).decimals();
+        uint256 outDecimals = IERC20Metadata(tokenOut).decimals();
+        if (inDecimals != outDecimals) {
+            expectedAmountOut =
+                (expectedAmountOut * (10 ** outDecimals)) /
+                (10 ** inDecimals);
+        }
+
+        // Calculate the minimum amount out with 2% slippage tolerance
+        uint256 amountOutMinimum = (expectedAmountOut * 98) / 100;
+
         bytes memory path = abi.encodePacked(
             tokenIn,
             uint24(fee1),
@@ -541,10 +567,22 @@ contract VaultStrategy is
                 path: path,
                 recipient: address(this),
                 amountIn: amountIn,
-                amountOutMinimum: 0
+                amountOutMinimum: amountOutMinimum
             });
 
         amountOut = swapRouter.exactInput(params);
+    }
+
+    function getPriceFeedId(address token) internal view returns (bytes32) {
+        if (token == address(asset())) {
+            return usdcUsdPriceFeedId;
+        } else if (token == cbETH) {
+            return cbEthUsdPriceFeedId;
+        } else if (token == AERO) {
+            return aeroUsdPriceFeedId;
+        } else {
+            revert("Unsupported token");
+        }
     }
 
     function _swapcbETHToUSDCAndAERO(
