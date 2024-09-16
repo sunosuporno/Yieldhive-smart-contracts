@@ -5,5 +5,6 @@
 @uniswap/v3-core/=lib/v3-core/
 @chainlink/contracts-ccip@1.4.0/=node_modules/@chainlink/contracts-ccip/
 @chainlink/contracts/src/v0.8/=node_modules/@chainlink/contracts/src/v0.8/
+@layerzerolabs/oft-evm/=lib/devtools/packages/oft-evm/
 @layerzerolabs/oapp-evm/=lib/devtools/packages/oapp-evm/
 @layerzerolabs/lz-evm-protocol-v2/=lib/layerzero-v2/packages/layerzero-v2/evm/protocol
