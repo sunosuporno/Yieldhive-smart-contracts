@@ -156,6 +156,8 @@ contract VaultStrategy is
 
         // Accumulate deposits instead of investing
         accumulatedDeposits += assets;
+        // Add accounting for _totalAccountedAssets
+        _totalAccountedAssets += assets;
 
         emit Deposit(caller, receiver, assets, shares);
     }
@@ -225,9 +227,6 @@ contract VaultStrategy is
         IERC20(AERO).safeTransfer(address(aerodromePool), aeroReceived);
         aerodromePool.mint(address(this));
         aerodromePool.skim(address(this));
-
-        // Add accounting for _totalAccountedAssets
-        _totalAccountedAssets += amount;
     }
 
     function _rebalancePosition(uint256 additionalAmountNeeded) internal {

@@ -90,4 +90,53 @@ contract Vault_StrategyTest is Test {
     }
 
     // Add more test functions as needed
+    function testDeposit() public {
+        vm.startPrank(user);
+        uint256 initalBalance = usdc.balanceOf(user);
+        vaultStrategy.deposit(100_000_000, user);
+        uint256 finalBalance = usdc.balanceOf(user);
+        vm.stopPrank();
+        assertEq(usdc.balanceOf(address(vaultStrategy)), 100_000_000);
+        assertEq(vaultStrategy.balanceOf(user), 100_000_000);
+        assertEq(finalBalance, initalBalance - 100_000_000);
+        assertEq(vaultStrategy.accumulatedDeposits(), 100_000_000);
+    }
+
+    function testMultipleDeposits() public {
+        address user2 = makeAddr("user2");
+        address user3 = makeAddr("user3");
+
+        // Give USDC to user2 and user3
+        deal(address(usdc), user2, 1000 * 10 ** 6);
+        deal(address(usdc), user3, 1000 * 10 ** 6);
+
+        // Approve VaultStrategy for user2 and user3
+        vm.prank(user2);
+        usdc.approve(address(vaultStrategy), type(uint256).max);
+        vm.prank(user3);
+        usdc.approve(address(vaultStrategy), type(uint256).max);
+
+        // User deposits
+        vm.prank(user);
+        vaultStrategy.deposit(50_000_000, user);
+
+        // User2 deposits
+        vm.prank(user2);
+        vaultStrategy.deposit(75_000_000, user2);
+
+        // User3 deposits
+        vm.prank(user3);
+        vaultStrategy.deposit(100_000_000, user3);
+
+        // Check individual balances
+        assertEq(vaultStrategy.balanceOf(user), 50_000_000);
+        assertEq(vaultStrategy.balanceOf(user2), 75_000_000);
+        assertEq(vaultStrategy.balanceOf(user3), 100_000_000);
+
+        // Check total accumulated deposits
+        assertEq(vaultStrategy.accumulatedDeposits(), 225_000_000);
+
+        // Check USDC balance of the vault
+        assertEq(usdc.balanceOf(address(vaultStrategy)), 225_000_000);
+    }
 }
