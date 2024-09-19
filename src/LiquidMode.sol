@@ -13,6 +13,8 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {IxRenzoDeposit} from "./interfaces/IxRenzoDeposit.sol";
+import {IRSETHPoolV2} from "./interfaces/IRSETHPoolV2.sol";
 
 contract VaultStrategy is
     Initializable,
@@ -26,6 +28,9 @@ contract VaultStrategy is
     using Math for uint256;
     using SafeERC20 for IERC20;
     using EnumerableSet for EnumerableSet.AddressSet;
+
+    IxRenzoDeposit public xRenzoDeposit;
+    IRSETHPoolV2 public rSETHPoolV2;
 
     bytes32 public constant REBALANCER_ROLE = keccak256("REBALANCER_ROLE");
 
@@ -70,7 +75,9 @@ contract VaultStrategy is
         address initialOwner,
         string memory name_,
         string memory symbol_,
-        address _strategist
+        address _strategist,
+        address _xRenzoDeposit,
+        address _rSETHPoolV2
     ) public initializer {
         __ERC4626_init(asset_);
         __ERC20_init(name_, symbol_);
@@ -84,6 +91,8 @@ contract VaultStrategy is
         _grantRole(REBALANCER_ROLE, initialOwner);
 
         strategist = _strategist;
+        xRenzoDeposit = IxRenzoDeposit(_xRenzoDeposit);
+        rSETHPoolV2 = IRSETHPoolV2(_rSETHPoolV2);
     }
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
@@ -103,7 +112,10 @@ contract VaultStrategy is
         emit Deposit(caller, receiver, assets, shares);
     }
 
-    function _investFunds(uint256 amount, address assetAddress) internal {}
+    function _investFunds(uint256 amount, address assetAddress) internal {
+        uint256 receivedEzETH = xRenzoDeposit.depositETH{value: amount / 2}(0, block.timestamp);
+        rSETHPoolV2.deposit{value: amount / 2}("string");
+    }
 
     function _withdrawFunds(uint256 amount) internal nonReentrant {}
 
