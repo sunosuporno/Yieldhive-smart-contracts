@@ -16,6 +16,15 @@
   "dependencies": {
     "@chainlink/contracts": "^1.2.0",
     "@chainlink/contracts-ccip": "^1.4.0",
+    "@cryptoalgebra/integral-core": "^1.1.0",
+    "@cryptoalgebra/integral-periphery": "^1.0.2",
     "@pythnetwork/pyth-sdk-solidity": "^3.1.0"
+  },
+  "devDependencies": {
+    "solc-0.5.0": "npm:solc@0.5.0",
+    "solc-0.6.0": "npm:solc@0.6.0",
+    "solc-0.7.6": "npm:solc@0.7.6",
+    "solc-0.8.20": "npm:solc@0.8.20",
+    "solc-0.8.26": "npm:solc@0.8.26"
   }
 }
