@@ -118,7 +118,7 @@ contract LiquidMode is
         if (kimPosition.tokenId == 0) {
             _createKIMPosition(receivedEzETH, receivedWRSETH);
         } else {
-            // _addLiquidityToKIMPosition(receivedEzETH, receivedWRSETH);
+            _addLiquidityToKIMPosition(receivedEzETH, receivedWRSETH);
         }
     }
 
@@ -150,6 +150,26 @@ contract LiquidMode is
         // Store the details in the struct
         kimPosition =
             KIMPosition({tokenId: tokenId, liquidity: liquidity, amount0: depositedAmount0, amount1: depositedAmount1});
+    }
+
+    function _addLiquidityToKIMPosition(uint256 amount0, uint256 amount1)
+        internal
+        returns (uint128 liquidity, uint256 addedAmount0, uint256 addedAmount1)
+    {
+        IERC20(EZETH).approve(address(nonfungiblePositionManager), amount0);
+        IERC20(WRSETH).approve(address(nonfungiblePositionManager), amount1);
+
+        INonfungiblePositionManager.IncreaseLiquidityParams memory params = INonfungiblePositionManager
+            .IncreaseLiquidityParams({
+            tokenId: kimPosition.tokenId,
+            amount0Desired: amount0,
+            amount1Desired: amount1,
+            amount0Min: 0,
+            amount1Min: 0,
+            deadline: block.timestamp
+        });
+
+        (liquidity, addedAmount0, addedAmount1) = nonfungiblePositionManager.increaseLiquidity(params);
     }
 
     function collectKIMFees() internal returns (uint256 amount0, uint256 amount1) {
@@ -259,6 +279,7 @@ contract LiquidMode is
 
     function onERC721Received(address operator, address, uint256 tokenId, bytes calldata)
         external
+        pure
         override
         returns (bytes4)
     {
