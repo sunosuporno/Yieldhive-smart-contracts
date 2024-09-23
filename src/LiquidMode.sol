@@ -13,6 +13,7 @@ import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {IxRenzoDeposit} from "./interfaces/IxRenzoDeposit.sol";
 import {IRSETHPoolV2} from "./interfaces/IRSETHPoolV2.sol";
+import {IWETH9} from "./interfaces/IWETH9.sol";
 import "@cryptoalgebra/integral-core/contracts/interfaces/IAlgebraPool.sol";
 import "@cryptoalgebra/integral-core/contracts/libraries/TickMath.sol";
 
@@ -66,6 +67,8 @@ contract LiquidMode is
 
     KIMPosition public kimPosition;
 
+    IWETH9 public immutable WETH;
+
     constructor(
         IERC20 asset_,
         string memory name_,
@@ -76,16 +79,16 @@ contract LiquidMode is
         address _rSETHPoolV2,
         INonfungiblePositionManager _nonfungiblePositionManager,
         address _factory,
-        address _WNativeToken,
         address _poolDeployer,
         address _EZETH,
         address _WRSETH,
-        uint24 _kimFee
+        uint24 _kimFee,
+        address _WETH
     )
         ERC4626(asset_)
         ERC20(name_, symbol_)
         Ownable(initialOwner)
-        PeripheryImmutableState(_factory, _WNativeToken, _poolDeployer)
+        PeripheryImmutableState(_factory, _WETH, _poolDeployer)
     {
         _grantRole(DEFAULT_ADMIN_ROLE, initialOwner);
         _grantRole(REBALANCER_ROLE, initialOwner);
@@ -98,20 +101,25 @@ contract LiquidMode is
         EZETH = _EZETH;
         WRSETH = _WRSETH;
         KIM_FEE = _kimFee;
+        WETH = IWETH9(_WETH);
     }
 
     function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override {
         address assetAddress = asset();
         SafeERC20.safeTransferFrom(IERC20(assetAddress), caller, address(this), assets);
 
+        // Unwrap WETH to ETH
+        WETH.withdraw(assets);
+
         _mint(receiver, shares);
 
         accumulatedDeposits += assets;
 
+        _investFunds(assets);
         emit Deposit(caller, receiver, assets, shares);
     }
 
-    function _investFunds(uint256 amount, address assetAddress) internal {
+    function _investFunds(uint256 amount) internal {
         uint256 receivedEzETH = xRenzoDeposit.depositETH{value: amount / 2}(0, block.timestamp);
         rSETHPoolV2.deposit{value: amount / 2}("");
         uint256 receivedWRSETH = IERC20(WRSETH).balanceOf(address(this));
@@ -288,5 +296,9 @@ contract LiquidMode is
         // _createDeposit(operator, tokenId);
 
         return this.onERC721Received.selector;
+    }
+
+    receive() external payable {
+        require(msg.sender == address(WETH), "ETH transfers only allowed from WETH");
     }
 }
