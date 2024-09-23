@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.26;
+pragma solidity ^0.8.20;
 
 import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
@@ -21,7 +22,15 @@ import "@cryptoalgebra/integral-periphery/contracts/base/LiquidityManagement.sol
 
 import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 
-contract VaultStrategy is ERC4626, Ownable, AccessControl, ReentrancyGuard, Pausable, LiquidityManagement {
+contract LiquidMode is
+    ERC4626,
+    Ownable,
+    AccessControl,
+    ReentrancyGuard,
+    Pausable,
+    IERC721Receiver,
+    LiquidityManagement
+{
     using Math for uint256;
     using SafeERC20 for IERC20;
     using EnumerableSet for EnumerableSet.AddressSet;
@@ -48,6 +57,15 @@ contract VaultStrategy is ERC4626, Ownable, AccessControl, ReentrancyGuard, Paus
 
     event StrategistFeeClaimed(uint256 claimedAmount, uint256 remainingFees);
 
+    struct KIMPosition {
+        uint256 tokenId;
+        uint128 liquidity;
+        uint256 amount0;
+        uint256 amount1;
+    }
+
+    KIMPosition public kimPosition;
+
     constructor(
         IERC20 asset_,
         string memory name_,
@@ -67,7 +85,7 @@ contract VaultStrategy is ERC4626, Ownable, AccessControl, ReentrancyGuard, Paus
         ERC4626(asset_)
         ERC20(name_, symbol_)
         Ownable(initialOwner)
-        LiquidityManagement(_factory, _WNativeToken, _poolDeployer)
+        PeripheryImmutableState(_factory, _WNativeToken, _poolDeployer)
     {
         _grantRole(DEFAULT_ADMIN_ROLE, initialOwner);
         _grantRole(REBALANCER_ROLE, initialOwner);
@@ -96,17 +114,24 @@ contract VaultStrategy is ERC4626, Ownable, AccessControl, ReentrancyGuard, Paus
     function _investFunds(uint256 amount, address assetAddress) internal {
         uint256 receivedEzETH = xRenzoDeposit.depositETH{value: amount / 2}(0, block.timestamp);
         rSETHPoolV2.deposit{value: amount / 2}("");
-
-        _createKIMPosition(receivedEzETH, receivedRSETH);
+        uint256 receivedWRSETH = IERC20(WRSETH).balanceOf(address(this));
+        if (kimPosition.tokenId == 0) {
+            _createKIMPosition(receivedEzETH, receivedWRSETH);
+        } else {
+            // _addLiquidityToKIMPosition(receivedEzETH, receivedWRSETH);
+        }
     }
 
-    function _createKIMPosition(uint256 amount0, uint256 amount1) internal {
+    function _createKIMPosition(uint256 amount0, uint256 amount1)
+        internal
+        returns (uint256 tokenId, uint128 liquidity, uint256 depositedAmount0, uint256 depositedAmount1)
+    {
         IERC20(EZETH).approve(address(nonfungiblePositionManager), amount0);
-        IERC20(RSETH).approve(address(nonfungiblePositionManager), amount1);
+        IERC20(WRSETH).approve(address(nonfungiblePositionManager), amount1);
 
         INonfungiblePositionManager.MintParams memory params = INonfungiblePositionManager.MintParams({
             token0: EZETH,
-            token1: RSETH,
+            token1: WRSETH,
             tickLower: TickMath.MIN_TICK,
             tickUpper: TickMath.MAX_TICK,
             amount0Desired: amount0,
@@ -117,10 +142,14 @@ contract VaultStrategy is ERC4626, Ownable, AccessControl, ReentrancyGuard, Paus
             deadline: block.timestamp
         });
 
-        (uint256 tokenId, uint128 liquidity,,) = nonfungiblePositionManager.mint(params);
+        (tokenId, liquidity, depositedAmount0, depositedAmount1) = nonfungiblePositionManager.mint(params);
 
         kimTokenId = tokenId;
         kimLiquidity = liquidity;
+
+        // Store the details in the struct
+        kimPosition =
+            KIMPosition({tokenId: tokenId, liquidity: liquidity, amount0: depositedAmount0, amount1: depositedAmount1});
     }
 
     function collectKIMFees() internal returns (uint256 amount0, uint256 amount1) {
@@ -228,7 +257,15 @@ contract VaultStrategy is ERC4626, Ownable, AccessControl, ReentrancyGuard, Paus
         emit Withdraw(caller, receiver, owner, assets, shares);
     }
 
-    function WNativeToken() public view returns (address) {
-        return WNativeToken;
+    function onERC721Received(address operator, address, uint256 tokenId, bytes calldata)
+        external
+        override
+        returns (bytes4)
+    {
+        // get position information
+
+        // _createDeposit(operator, tokenId);
+
+        return this.onERC721Received.selector;
     }
 }

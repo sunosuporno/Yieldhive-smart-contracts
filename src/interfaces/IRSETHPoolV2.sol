@@ -1,4 +1,4 @@
-pragma solidity ^0.8.21;
+pragma solidity ^0.8.20;
 
 interface IRSETHPoolV2 {
     function deposit(string memory referralId) external payable;
