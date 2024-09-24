@@ -23,6 +23,10 @@ import "@cryptoalgebra/integral-periphery/contracts/base/LiquidityManagement.sol
 
 import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 
+import "@cryptoalgebra/integral-periphery/contracts/libraries/LiquidityAmounts.sol";
+import "@cryptoalgebra/integral-periphery/contracts/libraries/PoolAddress.sol";
+import "@cryptoalgebra/integral-periphery/contracts/libraries/PoolInteraction.sol";
+
 contract LiquidMode is
     ERC4626,
     Ownable,
@@ -55,6 +59,7 @@ contract LiquidMode is
 
     uint256 public accumulatedDeposits;
     uint256 public _totalAccountedAssets;
+    address public ezETHwrsETHPool;
 
     event StrategistFeeClaimed(uint256 claimedAmount, uint256 remainingFees);
 
@@ -83,7 +88,8 @@ contract LiquidMode is
         address _EZETH,
         address _WRSETH,
         uint24 _kimFee,
-        address _WETH
+        address _WETH,
+        address _ezETHwrsETHPool
     )
         ERC4626(asset_)
         ERC20(name_, symbol_)
@@ -102,6 +108,7 @@ contract LiquidMode is
         WRSETH = _WRSETH;
         KIM_FEE = _kimFee;
         WETH = IWETH9(_WETH);
+        ezETHwrsETHPool = _ezETHwrsETHPool;
     }
 
     function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override {
@@ -178,6 +185,34 @@ contract LiquidMode is
         });
 
         (liquidity, addedAmount0, addedAmount1) = nonfungiblePositionManager.increaseLiquidity(params);
+    }
+
+    function _removeLiquidityFromKIMPosition(uint256 amount0, uint256 amount1)
+        internal
+        returns (uint256 removedAmount0, uint256 removedAmount1)
+    {
+        uint128 _liquidity = _getLiquidityForAmounts(amount0, amount1);
+        INonfungiblePositionManager.DecreaseLiquidityParams memory params = INonfungiblePositionManager
+            .DecreaseLiquidityParams({
+            tokenId: kimPosition.tokenId,
+            liquidity: _liquidity,
+            amount0Min: 0,
+            amount1Min: 0,
+            deadline: block.timestamp
+        });
+
+        (removedAmount0, removedAmount1) = nonfungiblePositionManager.decreaseLiquidity(params);
+    }
+
+    function _getLiquidityForAmounts(uint256 amount0, uint256 amount1) internal view returns (uint128 liquidity) {
+        //get position details
+        (,,,, int24 tickLower, int24 tickUpper,,,,,) = nonfungiblePositionManager.positions(kimPosition.tokenId);
+        uint160 sqrtPriceX96 = PoolInteraction._getSqrtPrice(IAlgebraPool(ezETHwrsETHPool));
+        uint160 sqrtRatioAX96 = TickMath.getSqrtRatioAtTick(tickLower);
+        uint160 sqrtRatioBX96 = TickMath.getSqrtRatioAtTick(tickUpper);
+
+        liquidity =
+            LiquidityAmounts.getLiquidityForAmounts(sqrtPriceX96, sqrtRatioAX96, sqrtRatioBX96, amount0, amount1);
     }
 
     function collectKIMFees() internal returns (uint256 amount0, uint256 amount1) {
@@ -296,9 +331,5 @@ contract LiquidMode is
         // _createDeposit(operator, tokenId);
 
         return this.onERC721Received.selector;
-    }
-
-    receive() external payable {
-        require(msg.sender == address(WETH), "ETH transfers only allowed from WETH");
     }
 }
