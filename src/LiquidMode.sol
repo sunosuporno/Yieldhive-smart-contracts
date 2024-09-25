@@ -26,6 +26,8 @@ import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 import "@cryptoalgebra/integral-periphery/contracts/libraries/LiquidityAmounts.sol";
 import "@cryptoalgebra/integral-periphery/contracts/libraries/PoolAddress.sol";
 import "@cryptoalgebra/integral-periphery/contracts/libraries/PoolInteraction.sol";
+import {TransferHelper} from "@cryptoalgebra/integral-periphery/contracts/libraries/TransferHelper.sol";
+import {ISwapRouter} from "@cryptoalgebra/integral-periphery/contracts/interfaces/ISwapRouter.sol";
 
 contract LiquidMode is
     ERC4626,
@@ -42,6 +44,7 @@ contract LiquidMode is
 
     IxRenzoDeposit public immutable xRenzoDeposit;
     IRSETHPoolV2 public immutable rSETHPoolV2;
+    ISwapRouter public immutable swapRouter;
 
     INonfungiblePositionManager public immutable nonfungiblePositionManager;
     address public immutable EZETH;
@@ -89,7 +92,8 @@ contract LiquidMode is
         address _WRSETH,
         uint24 _kimFee,
         address _WETH,
-        address _ezETHwrsETHPool
+        address _ezETHwrsETHPool,
+        ISwapRouter _swapRouter
     )
         ERC4626(asset_)
         ERC20(name_, symbol_)
@@ -109,6 +113,7 @@ contract LiquidMode is
         KIM_FEE = _kimFee;
         WETH = IWETH9(_WETH);
         ezETHwrsETHPool = _ezETHwrsETHPool;
+        swapRouter = _swapRouter;
     }
 
     function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override {
@@ -226,7 +231,36 @@ contract LiquidMode is
         return nonfungiblePositionManager.collect(params);
     }
 
-    function _withdrawFunds(uint256 amount) internal nonReentrant {}
+    function _withdrawFunds(uint256 amount) internal nonReentrant returns (uint256 totalWETH) {
+        //Convert to amount / 2 to wrsETH and ezETH
+        uint256 ezETHAmount = amount / 2;
+        uint256 wrsETHAmount = amount / 2;
+
+        //take out liquidity from KIM position
+        (uint256 removedAmount0, uint256 removedAmount1) = _removeLiquidityFromKIMPosition(ezETHAmount, wrsETHAmount);
+
+        //swap ezETH for ETH
+        uint256 wethForEZETH = _swapForETH(removedAmount0, EZETH);
+        uint256 wethForWRSETH = _swapForETH(removedAmount1, WRSETH);
+
+        totalWETH = wethForEZETH + wethForWRSETH;
+    }
+
+    function _swapForETH(uint256 amountIn, address tokenIn) internal returns (uint256 amountOut) {
+        TransferHelper.safeApprove(tokenIn, address(swapRouter), amountIn);
+
+        ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
+            tokenIn: tokenIn,
+            tokenOut: address(WETH),
+            recipient: address(this),
+            deadline: block.timestamp,
+            amountIn: amountIn,
+            amountOutMinimum: 0,
+            limitSqrtPrice: 0
+        });
+
+        amountOut = swapRouter.exactInputSingle(params);
+    }
 
     function _investIdleFunds() internal {}
 
@@ -313,11 +347,11 @@ contract LiquidMode is
 
         _burn(owner, shares);
 
-        _withdrawFunds(assets);
+        uint256 wethWithdrawn = _withdrawFunds(assets);
 
-        SafeERC20.safeTransfer(IERC20(asset()), receiver, assets);
+        SafeERC20.safeTransfer(IERC20(asset()), receiver, wethWithdrawn);
 
-        emit Withdraw(caller, receiver, owner, assets, shares);
+        emit Withdraw(caller, receiver, owner, wethWithdrawn, shares);
     }
 
     function onERC721Received(address operator, address, uint256 tokenId, bytes calldata)
