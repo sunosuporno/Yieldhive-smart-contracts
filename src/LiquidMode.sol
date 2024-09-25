@@ -121,7 +121,7 @@ contract LiquidMode is
         SafeERC20.safeTransferFrom(IERC20(assetAddress), caller, address(this), assets);
 
         // Unwrap WETH to ETH
-        WETH.withdraw(assets);
+        WETH.deposit{value: assets}();
 
         _mint(receiver, shares);
 
