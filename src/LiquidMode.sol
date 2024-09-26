@@ -236,11 +236,13 @@ contract LiquidMode is
 
     function _withdrawFunds(uint256 amount) internal nonReentrant returns (uint256 totalWETH) {
         // Get the price feeds
-        (int224 ezETHPrice,) = readDataFeed(ezEthEthProxy);
-        (int224 wrsETHPrice,) = readDataFeed(wrsEthEthProxy);
+        (int224 _ezETHPrice,) = readDataFeed(ezEthEthProxy);
+        uint256 ezETHPrice = uint256(uint224(_ezETHPrice));
+        (int224 _wrsETHPrice,) = readDataFeed(wrsEthEthProxy);
+        uint256 wrsETHPrice = uint256(uint224(_wrsETHPrice));
 
-        uint256 ezETHAmount = (amount * 10 ** 18) / (uint256(ezETHPrice) * 2);
-        uint256 wrsETHAmount = (amount * 10 ** 18) / (uint256(wrsETHPrice) * 2);
+        uint256 ezETHAmount = (amount * 10 ** 18) / (ezETHPrice * 2);
+        uint256 wrsETHAmount = (amount * 10 ** 18) / (wrsETHPrice * 2);
         //Convert to amount / 2 to wrsETH and ezETH
         uint256 ezETHAmountPrecise = ezETHAmount / 10 ** 18;
         uint256 wrsETHAmountPrecise = wrsETHAmount / 10 ** 18;
@@ -274,12 +276,65 @@ contract LiquidMode is
         amountOut = swapRouter.exactInputSingle(params);
     }
 
+    function _swapBeforeReinvest(uint256 amountIn, bytes memory path, uint256 amountOutMinimum, address tokenIn)
+        internal
+        returns (uint256 amountOut)
+    {
+        TransferHelper.safeApprove(tokenIn, address(swapRouter), amountIn);
+
+        ISwapRouter.ExactInputParams memory params = ISwapRouter.ExactInputParams({
+            path: path,
+            recipient: address(this),
+            deadline: block.timestamp,
+            amountIn: amountIn,
+            amountOutMinimum: amountOutMinimum * 998 / 1000
+        });
+    }
+
     function _investIdleFunds() internal {}
 
     function harvestReinvestAndReport() external onlyOwner nonReentrant {
         (uint256 amount0, uint256 amount1) = _collectKIMFees();
-        //convert the amount of ezETH and wrsETH to ETH
-        _addLiquidityToKIMPosition(amount0, amount1);
+
+        if (amount0 > 0 || amount1 > 0) {
+            //convert the amount of ezETH and wrsETH to ETH
+            (int224 _ezETHPrice,) = readDataFeed(ezEthEthProxy);
+            uint256 ezETHPrice = uint256(uint224(_ezETHPrice));
+            (int224 _wrsETHPrice,) = readDataFeed(wrsEthEthProxy);
+            uint256 wrsETHPrice = uint256(uint224(_wrsETHPrice));
+
+            uint256 amount0InETH = (amount0 * ezETHPrice) / 10 ** 18;
+            uint256 amount1InETH = (amount1 * wrsETHPrice) / 10 ** 18;
+
+            _totalAccountedAssets += amount0InETH + amount1InETH;
+
+            if (amount0InETH > amount1InETH) {
+                _balanceAssets(amount0InETH, amount1InETH, ezETHPrice, wrsETHPrice, EZETH, WRSETH);
+            } else if (amount1InETH > amount0InETH) {
+                _balanceAssets(amount1InETH, amount0InETH, wrsETHPrice, ezETHPrice, WRSETH, EZETH);
+            }
+
+            uint256 currentEzETHBalance = IERC20(EZETH).balanceOf(address(this));
+            uint256 currentWrsETHBalance = IERC20(WRSETH).balanceOf(address(this));
+
+            _addLiquidityToKIMPosition(currentEzETHBalance, currentWrsETHBalance);
+        }
+    }
+
+    function _balanceAssets(
+        uint256 higherAmount,
+        uint256 lowerAmount,
+        uint256 higherPrice,
+        uint256 lowerPrice,
+        address tokenIn,
+        address tokenOut
+    ) internal {
+        uint256 difference = higherAmount - lowerAmount;
+        uint256 amountToSwapInETH = difference / 2;
+        uint256 amountToSwapInToken = amountToSwapInETH * 10 ** 18 / higherPrice;
+        uint256 sameAmountInOtherToken = amountToSwapInETH * 10 ** 18 / lowerPrice;
+        bytes memory path = abi.encodePacked(tokenIn, WETH, tokenOut);
+        _swapBeforeReinvest(amountToSwapInToken / 10 ** 18, path, sameAmountInOtherToken / 10 ** 18, tokenIn);
     }
 
     function claimStrategistFees(uint256 amount) external nonReentrant {}
