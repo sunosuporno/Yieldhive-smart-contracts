@@ -313,8 +313,8 @@ contract LiquidMode is
             (int224 _wrsETHPrice,) = readDataFeed(wrsEthEthProxy);
             uint256 wrsETHPrice = uint256(uint224(_wrsETHPrice));
 
-            uint256 amount0InETH = (amount0 * ezETHPrice) / 10 ** 18;
-            uint256 amount1InETH = (amount1 * wrsETHPrice) / 10 ** 18;
+            uint256 amount0InETH = amount0 > 0 ? (amount0 * ezETHPrice) / 10 ** 18 : 0;
+            uint256 amount1InETH = amount1 > 0 ? (amount1 * wrsETHPrice) / 10 ** 18 : 0;
 
             _totalAccountedAssets += amount0InETH + amount1InETH;
 
