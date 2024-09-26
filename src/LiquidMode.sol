@@ -69,6 +69,8 @@ contract LiquidMode is
 
     event StrategistFeeClaimed(uint256 claimedAmount, uint256 remainingFees);
     event AnnualManagementFeeCollected(uint256 feeAmount);
+    event StrategistFeePercentageUpdated(uint256 newPercentage);
+    event ManagementFeePercentageUpdated(uint256 newPercentage);
 
     struct KIMPosition {
         uint256 tokenId;
@@ -83,8 +85,10 @@ contract LiquidMode is
 
     uint256 public liquiditySlippageTolerance = 200; // 2% default for liquidity operations
     uint256 public swapSlippageTolerance = 100; // 1% default for swaps
-    uint256 public constant STRATEGIST_FEE_PERCENTAGE = 2000; // 20% with 2 decimal places
-    uint256 public constant MANAGEMENT_FEE_PERCENTAGE = 100; // 1% annual fee with 2 decimal places
+    uint256 public strategistFeePercentage = 2000; // 20% with 2 decimal places
+    uint256 public managementFeePercentage = 100; // 1% annual fee with 2 decimal places
+    uint256 public constant MAX_STRATEGIST_FEE_PERCENTAGE = 3000; // 30% maximum
+    uint256 public constant MAX_MANAGEMENT_FEE_PERCENTAGE = 500; // 5% maximum
     uint256 public constant MANAGEMENT_FEE_INTERVAL = 365 days;
 
     constructor(
@@ -319,8 +323,12 @@ contract LiquidMode is
             uint256 amount0InETH = amount0 > 0 ? (amount0 * ezETHPrice) / 10 ** 18 : 0;
             uint256 amount1InETH = amount1 > 0 ? (amount1 * wrsETHPrice) / 10 ** 18 : 0;
 
-            accumulatedStrategistFee += ((amount0InETH + amount1InETH) * STRATEGIST_FEE_PERCENTAGE) / 10000;
-            _totalAccountedAssets += ((amount0InETH + amount1InETH) * (10000 - MANAGEMENT_FEE_PERCENTAGE)) / 10000;
+            // Calculate and accrue performance fee
+            uint256 totalProfit = amount0InETH + amount1InETH;
+            uint256 performanceFee = (totalProfit * strategistFeePercentage) / 10000;
+            accumulatedStrategistFee += performanceFee;
+
+            _totalAccountedAssets += totalProfit - performanceFee;
 
             if (amount0InETH > amount1InETH) {
                 _balanceAssets(amount0InETH, amount1InETH, ezETHPrice, wrsETHPrice, EZETH, WRSETH);
@@ -397,6 +405,18 @@ contract LiquidMode is
 
     function setTreasury(address _treasury) external onlyOwner {
         treasury = _treasury;
+    }
+
+    function setStrategistFeePercentage(uint256 _newPercentage) external onlyOwner {
+        require(_newPercentage <= MAX_STRATEGIST_FEE_PERCENTAGE, "Fee exceeds maximum allowed");
+        strategistFeePercentage = _newPercentage;
+        emit StrategistFeePercentageUpdated(_newPercentage);
+    }
+
+    function setManagementFeePercentage(uint256 _newPercentage) external onlyOwner {
+        require(_newPercentage <= MAX_MANAGEMENT_FEE_PERCENTAGE, "Fee exceeds maximum allowed");
+        managementFeePercentage = _newPercentage;
+        emit ManagementFeePercentageUpdated(_newPercentage);
     }
 
     function deposit(uint256 assets, address receiver)
