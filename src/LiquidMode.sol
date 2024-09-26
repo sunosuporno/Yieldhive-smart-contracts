@@ -55,7 +55,7 @@ contract LiquidMode is
     uint256 public kimTokenId;
     uint128 public kimLiquidity;
 
-    bytes32 public constant REBALANCER_ROLE = keccak256("REBALANCER_ROLE");
+    bytes32 public constant HARVESTER_ROLE = keccak256("HARVESTER_ROLE");
 
     address public strategist;
     uint256 public accumulatedStrategistFee;
@@ -303,7 +303,7 @@ contract LiquidMode is
 
     function _investIdleFunds() internal {}
 
-    function harvestReinvestAndReport() external onlyOwner nonReentrant {
+    function harvestReinvestAndReport() external nonReentrant onlyRole(HARVESTER_ROLE) {
         (uint256 amount0, uint256 amount1) = _collectKIMFees();
 
         if (amount0 > 0 || amount1 > 0) {
