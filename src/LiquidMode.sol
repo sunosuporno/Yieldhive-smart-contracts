@@ -264,13 +264,13 @@ contract LiquidMode is
             _removeLiquidityFromKIMPosition(ezETHAmountPrecise, wrsETHAmountPrecise);
 
         //swap ezETH for ETH
-        uint256 wethForEZETH = _swapForETH(removedAmount0, EZETH);
-        uint256 wethForWRSETH = _swapForETH(removedAmount1, WRSETH);
+        uint256 wethForEZETH = _swapForToken(removedAmount0, EZETH, address(WETH));
+        uint256 wethForWRSETH = _swapForToken(removedAmount1, WRSETH, address(WETH));
 
         totalWETH = wethForEZETH + wethForWRSETH;
     }
 
-    function _swapForETH(uint256 amountIn, address tokenIn) internal returns (uint256 amountOut) {
+    function _swapForToken(uint256 amountIn, address tokenIn, address tokenOut) internal returns (uint256 amountOut) {
         TransferHelper.safeApprove(tokenIn, address(swapRouter), amountIn);
 
         (int224 _tokenInPrice,) = readDataFeed(tokenIn);
@@ -280,7 +280,7 @@ contract LiquidMode is
 
         ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
             tokenIn: tokenIn,
-            tokenOut: address(WETH),
+            tokenOut: tokenOut,
             recipient: address(this),
             deadline: block.timestamp,
             amountIn: amountIn,
@@ -340,6 +340,53 @@ contract LiquidMode is
             uint256 currentWrsETHBalance = IERC20(WRSETH).balanceOf(address(this));
 
             _addLiquidityToKIMPosition(currentEzETHBalance, currentWrsETHBalance);
+        }
+    }
+
+    // ... existing code ...
+
+    function performMaintenance() external nonReentrant onlyRole(HARVESTER_ROLE) {
+        // Check balances
+        uint256 wethBalance = WETH.balanceOf(address(this));
+        uint256 wrsETHBalance = IERC20(WRSETH).balanceOf(address(this));
+        uint256 ezETHBalance = IERC20(EZETH).balanceOf(address(this));
+
+        // Convert WETH to wrsETH and ezETH if necessary
+        if (wethBalance > 0) {
+            uint256 halfWETH = wethBalance / 2;
+
+            // Swap WETH for wrsETH
+
+            uint256 wrsETHReceived = _swapForToken(halfWETH, address(WETH), WRSETH);
+            wrsETHBalance += wrsETHReceived;
+
+            // Swap WETH for ezETH
+            uint256 ezETHReceived = _swapForToken(halfWETH, address(WETH), EZETH);
+            ezETHBalance += ezETHReceived;
+        }
+
+        // Get price feeds
+        (int224 _ezETHPrice,) = readDataFeed(ezEthEthProxy);
+        uint256 ezETHPrice = uint256(uint224(_ezETHPrice));
+        (int224 _wrsETHPrice,) = readDataFeed(wrsEthEthProxy);
+        uint256 wrsETHPrice = uint256(uint224(_wrsETHPrice));
+
+        // Convert balances to ETH value
+        uint256 wrsETHValueInETH = (wrsETHBalance * wrsETHPrice) / 10 ** 18;
+        uint256 ezETHValueInETH = (ezETHBalance * ezETHPrice) / 10 ** 18;
+
+        // Balance assets if necessary
+        if (wrsETHValueInETH > ezETHValueInETH) {
+            _balanceAssets(wrsETHValueInETH, ezETHValueInETH, wrsETHPrice, ezETHPrice, WRSETH, EZETH);
+        } else if (ezETHValueInETH > wrsETHValueInETH) {
+            _balanceAssets(ezETHValueInETH, wrsETHValueInETH, ezETHPrice, wrsETHPrice, EZETH, WRSETH);
+        }
+
+        // Add liquidity to KIM position
+        uint256 finalWrsETHBalance = IERC20(WRSETH).balanceOf(address(this));
+        uint256 finalEzETHBalance = IERC20(EZETH).balanceOf(address(this));
+        if (finalWrsETHBalance > 0 && finalEzETHBalance > 0) {
+            _addLiquidityToKIMPosition(finalEzETHBalance, finalWrsETHBalance);
         }
     }
 
@@ -511,7 +558,7 @@ contract LiquidMode is
         require(block.timestamp >= lastManagementFeeCollection + MANAGEMENT_FEE_INTERVAL, "Fee collection not yet due");
 
         // Calculate annual management fee
-        uint256 annualManagementFee = (totalAssets() * MANAGEMENT_FEE_PERCENTAGE) / 10000;
+        uint256 annualManagementFee = (totalAssets() * managementFeePercentage) / 10000;
 
         accumulatedStrategistFee += annualManagementFee;
         _totalAccountedAssets -= annualManagementFee;
