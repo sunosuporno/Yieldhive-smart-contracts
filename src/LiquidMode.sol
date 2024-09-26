@@ -14,6 +14,7 @@ import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {IxRenzoDeposit} from "./interfaces/IxRenzoDeposit.sol";
 import {IRSETHPoolV2} from "./interfaces/IRSETHPoolV2.sol";
 import {IWETH9} from "./interfaces/IWETH9.sol";
+import "@api3/contracts/api3-server-v1/proxies/interfaces/IProxy.sol";
 import "@cryptoalgebra/integral-core/contracts/interfaces/IAlgebraPool.sol";
 import "@cryptoalgebra/integral-core/contracts/libraries/TickMath.sol";
 
@@ -63,6 +64,8 @@ contract LiquidMode is
     uint256 public accumulatedDeposits;
     uint256 public _totalAccountedAssets;
     address public ezETHwrsETHPool;
+    address public ezEthEthProxy;
+    address public wrsEthEthProxy;
 
     event StrategistFeeClaimed(uint256 claimedAmount, uint256 remainingFees);
 
@@ -220,7 +223,7 @@ contract LiquidMode is
             LiquidityAmounts.getLiquidityForAmounts(sqrtPriceX96, sqrtRatioAX96, sqrtRatioBX96, amount0, amount1);
     }
 
-    function collectKIMFees() internal returns (uint256 amount0, uint256 amount1) {
+    function _collectKIMFees() internal returns (uint256 amount0, uint256 amount1) {
         INonfungiblePositionManager.CollectParams memory params = INonfungiblePositionManager.CollectParams({
             tokenId: kimTokenId,
             recipient: address(this),
@@ -232,18 +235,27 @@ contract LiquidMode is
     }
 
     function _withdrawFunds(uint256 amount) internal nonReentrant returns (uint256 totalWETH) {
+        // Get the price feeds
+        (int224 ezETHPrice,) = readDataFeed(ezEthEthProxy);
+        (int224 wrsETHPrice,) = readDataFeed(wrsEthEthProxy);
+
+        uint256 ezETHAmount = (amount * 10 ** 18) / (uint256(ezETHPrice) * 2);
+        uint256 wrsETHAmount = (amount * 10 ** 18) / (uint256(wrsETHPrice) * 2);
         //Convert to amount / 2 to wrsETH and ezETH
-        uint256 ezETHAmount = amount / 2;
-        uint256 wrsETHAmount = amount / 2;
+        uint256 ezETHAmountPrecise = ezETHAmount / 10 ** 18;
+        uint256 wrsETHAmountPrecise = wrsETHAmount / 10 ** 18;
 
         //take out liquidity from KIM position
-        (uint256 removedAmount0, uint256 removedAmount1) = _removeLiquidityFromKIMPosition(ezETHAmount, wrsETHAmount);
+        (uint256 removedAmount0, uint256 removedAmount1) =
+            _removeLiquidityFromKIMPosition(ezETHAmountPrecise, wrsETHAmountPrecise);
 
         //swap ezETH for ETH
         uint256 wethForEZETH = _swapForETH(removedAmount0, EZETH);
         uint256 wethForWRSETH = _swapForETH(removedAmount1, WRSETH);
 
         totalWETH = wethForEZETH + wethForWRSETH;
+
+        _totalAccountedAssets -= totalWETH;
     }
 
     function _swapForETH(uint256 amountIn, address tokenIn) internal returns (uint256 amountOut) {
@@ -264,7 +276,11 @@ contract LiquidMode is
 
     function _investIdleFunds() internal {}
 
-    function harvestReinvestAndReport() external onlyOwner nonReentrant {}
+    function harvestReinvestAndReport() external onlyOwner nonReentrant {
+        (uint256 amount0, uint256 amount1) = _collectKIMFees();
+        //convert the amount of ezETH and wrsETH to ETH
+        _addLiquidityToKIMPosition(amount0, amount1);
+    }
 
     function claimStrategistFees(uint256 amount) external nonReentrant {}
 
@@ -282,6 +298,14 @@ contract LiquidMode is
 
     function setStrategist(address _strategist) external onlyOwner {
         strategist = _strategist;
+    }
+
+    function setEzEthEthProxy(address _ezEthEthProxy) external onlyOwner {
+        ezEthEthProxy = _ezEthEthProxy;
+    }
+
+    function setWrsEthEthProxy(address _wrsEthEthProxy) external onlyOwner {
+        wrsEthEthProxy = _wrsEthEthProxy;
     }
 
     function deposit(uint256 assets, address receiver)
@@ -352,6 +376,10 @@ contract LiquidMode is
         SafeERC20.safeTransfer(IERC20(asset()), receiver, wethWithdrawn);
 
         emit Withdraw(caller, receiver, owner, wethWithdrawn, shares);
+    }
+
+    function readDataFeed(address proxy) public view returns (int224 value, uint32 timestamp) {
+        (value, timestamp) = IProxy(proxy).read();
     }
 
     function onERC721Received(address operator, address, uint256 tokenId, bytes calldata)

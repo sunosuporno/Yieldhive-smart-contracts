@@ -9,3 +9,4 @@
 @layerzerolabs/lz-evm-protocol-v2/=lib/layerzero-v2/packages/layerzero-v2/evm/protocol
 @cryptoalgebra/integral-core/=node_modules/@cryptoalgebra/integral-core/
 @cryptoalgebra/integral-periphery/=node_modules/@cryptoalgebra/integral-periphery/
+@api3/contracts/=node_modules/@api3/contracts/
