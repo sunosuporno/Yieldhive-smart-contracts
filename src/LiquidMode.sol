@@ -50,7 +50,6 @@ contract LiquidMode is
     INonfungiblePositionManager public immutable nonfungiblePositionManager;
     address public immutable EZETH;
     address public immutable WRSETH;
-    uint24 public immutable KIM_FEE;
 
     uint256 public kimTokenId;
     uint128 public kimLiquidity;
@@ -59,15 +58,17 @@ contract LiquidMode is
 
     address public strategist;
     uint256 public accumulatedStrategistFee;
-    uint256 public constant STRATEGIST_FEE_PERCENTAGE = 2000; // 20% with 2 decimal places
+    uint256 public lastManagementFeeCollection;
 
-    uint256 public accumulatedDeposits;
+    uint256 public totalDeposits;
     uint256 public _totalAccountedAssets;
     address public ezETHwrsETHPool;
     address public ezEthEthProxy;
     address public wrsEthEthProxy;
+    address public treasury;
 
     event StrategistFeeClaimed(uint256 claimedAmount, uint256 remainingFees);
+    event AnnualManagementFeeCollected(uint256 feeAmount);
 
     struct KIMPosition {
         uint256 tokenId;
@@ -82,6 +83,9 @@ contract LiquidMode is
 
     uint256 public liquiditySlippageTolerance = 200; // 2% default for liquidity operations
     uint256 public swapSlippageTolerance = 100; // 1% default for swaps
+    uint256 public constant STRATEGIST_FEE_PERCENTAGE = 2000; // 20% with 2 decimal places
+    uint256 public constant MANAGEMENT_FEE_PERCENTAGE = 100; // 1% annual fee with 2 decimal places
+    uint256 public constant MANAGEMENT_FEE_INTERVAL = 365 days;
 
     constructor(
         IERC20 asset_,
@@ -96,10 +100,10 @@ contract LiquidMode is
         address _poolDeployer,
         address _EZETH,
         address _WRSETH,
-        uint24 _kimFee,
         address _WETH,
         address _ezETHwrsETHPool,
-        ISwapRouter _swapRouter
+        ISwapRouter _swapRouter,
+        address _treasury
     )
         ERC4626(asset_)
         ERC20(name_, symbol_)
@@ -107,7 +111,7 @@ contract LiquidMode is
         PeripheryImmutableState(_factory, _WETH, _poolDeployer)
     {
         _grantRole(DEFAULT_ADMIN_ROLE, initialOwner);
-        _grantRole(REBALANCER_ROLE, initialOwner);
+        _grantRole(HARVESTER_ROLE, initialOwner);
 
         strategist = _strategist;
         xRenzoDeposit = IxRenzoDeposit(_xRenzoDeposit);
@@ -116,10 +120,10 @@ contract LiquidMode is
         nonfungiblePositionManager = _nonfungiblePositionManager;
         EZETH = _EZETH;
         WRSETH = _WRSETH;
-        KIM_FEE = _kimFee;
         WETH = IWETH9(_WETH);
         ezETHwrsETHPool = _ezETHwrsETHPool;
         swapRouter = _swapRouter;
+        treasury = _treasury;
     }
 
     function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override {
@@ -131,7 +135,8 @@ contract LiquidMode is
 
         _mint(receiver, shares);
 
-        accumulatedDeposits += assets;
+        totalDeposits += assets;
+        _totalAccountedAssets += assets;
 
         _investFunds(assets);
         emit Deposit(caller, receiver, assets, shares);
@@ -259,8 +264,6 @@ contract LiquidMode is
         uint256 wethForWRSETH = _swapForETH(removedAmount1, WRSETH);
 
         totalWETH = wethForEZETH + wethForWRSETH;
-
-        _totalAccountedAssets -= totalWETH;
     }
 
     function _swapForETH(uint256 amountIn, address tokenIn) internal returns (uint256 amountOut) {
@@ -316,7 +319,8 @@ contract LiquidMode is
             uint256 amount0InETH = amount0 > 0 ? (amount0 * ezETHPrice) / 10 ** 18 : 0;
             uint256 amount1InETH = amount1 > 0 ? (amount1 * wrsETHPrice) / 10 ** 18 : 0;
 
-            _totalAccountedAssets += amount0InETH + amount1InETH;
+            accumulatedStrategistFee += ((amount0InETH + amount1InETH) * STRATEGIST_FEE_PERCENTAGE) / 10000;
+            _totalAccountedAssets += ((amount0InETH + amount1InETH) * (10000 - MANAGEMENT_FEE_PERCENTAGE)) / 10000;
 
             if (amount0InETH > amount1InETH) {
                 _balanceAssets(amount0InETH, amount1InETH, ezETHPrice, wrsETHPrice, EZETH, WRSETH);
@@ -347,18 +351,26 @@ contract LiquidMode is
         _swapBeforeReinvest(amountToSwapInToken / 10 ** 18, path, sameAmountInOtherToken / 10 ** 18, tokenIn);
     }
 
-    function claimStrategistFees(uint256 amount) external nonReentrant {}
+    function claimStrategistFees(uint256 amount) external nonReentrant {
+        require(msg.sender == strategist, "Only strategist can claim fees");
+        require(amount <= accumulatedStrategistFee, "Insufficient fees to claim");
+
+        accumulatedStrategistFee -= amount;
+        _withdrawFunds(amount);
+        SafeERC20.safeTransfer(IERC20(asset()), strategist, amount);
+        emit StrategistFeeClaimed(amount, accumulatedStrategistFee);
+    }
 
     function totalAssets() public view override returns (uint256) {
         return _totalAccountedAssets;
     }
 
     function grantRebalancerRole(address account) external onlyOwner {
-        grantRole(REBALANCER_ROLE, account);
+        grantRole(HARVESTER_ROLE, account);
     }
 
     function revokeRebalancerRole(address account) external onlyOwner {
-        revokeRole(REBALANCER_ROLE, account);
+        revokeRole(HARVESTER_ROLE, account);
     }
 
     function setStrategist(address _strategist) external onlyOwner {
@@ -381,6 +393,10 @@ contract LiquidMode is
     function setSwapSlippageTolerance(uint256 _newTolerance) external onlyOwner {
         require(_newTolerance <= 500, "Swap slippage tolerance cannot exceed 5%");
         swapSlippageTolerance = _newTolerance;
+    }
+
+    function setTreasury(address _treasury) external onlyOwner {
+        treasury = _treasury;
     }
 
     function deposit(uint256 assets, address receiver)
@@ -447,7 +463,7 @@ contract LiquidMode is
         _burn(owner, shares);
 
         uint256 wethWithdrawn = _withdrawFunds(assets);
-
+        _totalAccountedAssets -= wethWithdrawn;
         SafeERC20.safeTransfer(IERC20(asset()), receiver, wethWithdrawn);
 
         emit Withdraw(caller, receiver, owner, wethWithdrawn, shares);
@@ -468,5 +484,18 @@ contract LiquidMode is
         // _createDeposit(operator, tokenId);
 
         return this.onERC721Received.selector;
+    }
+
+    function collectAnnualManagementFee() external {
+        require(msg.sender == strategist, "Only strategist can collect fees");
+        require(block.timestamp >= lastManagementFeeCollection + MANAGEMENT_FEE_INTERVAL, "Fee collection not yet due");
+
+        // Calculate annual management fee
+        uint256 annualManagementFee = (totalAssets() * MANAGEMENT_FEE_PERCENTAGE) / 10000;
+
+        accumulatedStrategistFee += annualManagementFee;
+        _totalAccountedAssets -= annualManagementFee;
+
+        emit AnnualManagementFeeCollected(annualManagementFee);
     }
 }
