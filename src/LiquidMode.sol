@@ -80,6 +80,9 @@ contract LiquidMode is
 
     IWETH9 public immutable WETH;
 
+    uint256 public liquiditySlippageTolerance = 200; // 2% default for liquidity operations
+    uint256 public swapSlippageTolerance = 100; // 1% default for swaps
+
     constructor(
         IERC20 asset_,
         string memory name_,
@@ -159,8 +162,8 @@ contract LiquidMode is
             tickUpper: TickMath.MAX_TICK,
             amount0Desired: amount0,
             amount1Desired: amount1,
-            amount0Min: 0,
-            amount1Min: 0,
+            amount0Min: (amount0 * (10000 - liquiditySlippageTolerance)) / 10000,
+            amount1Min: (amount1 * (10000 - liquiditySlippageTolerance)) / 10000,
             recipient: address(this),
             deadline: block.timestamp
         });
@@ -187,8 +190,8 @@ contract LiquidMode is
             tokenId: kimPosition.tokenId,
             amount0Desired: amount0,
             amount1Desired: amount1,
-            amount0Min: 0,
-            amount1Min: 0,
+            amount0Min: (amount0 * (10000 - liquiditySlippageTolerance)) / 10000,
+            amount1Min: (amount1 * (10000 - liquiditySlippageTolerance)) / 10000,
             deadline: block.timestamp
         });
 
@@ -204,8 +207,8 @@ contract LiquidMode is
             .DecreaseLiquidityParams({
             tokenId: kimPosition.tokenId,
             liquidity: _liquidity,
-            amount0Min: 0,
-            amount1Min: 0,
+            amount0Min: (amount0 * (10000 - liquiditySlippageTolerance)) / 10000,
+            amount1Min: (amount1 * (10000 - liquiditySlippageTolerance)) / 10000,
             deadline: block.timestamp
         });
 
@@ -225,7 +228,7 @@ contract LiquidMode is
 
     function _collectKIMFees() internal returns (uint256 amount0, uint256 amount1) {
         INonfungiblePositionManager.CollectParams memory params = INonfungiblePositionManager.CollectParams({
-            tokenId: kimTokenId,
+            tokenId: kimPosition.tokenId,
             recipient: address(this),
             amount0Max: type(uint128).max,
             amount1Max: type(uint128).max
@@ -263,13 +266,18 @@ contract LiquidMode is
     function _swapForETH(uint256 amountIn, address tokenIn) internal returns (uint256 amountOut) {
         TransferHelper.safeApprove(tokenIn, address(swapRouter), amountIn);
 
+        (int224 _tokenInPrice,) = readDataFeed(tokenIn);
+        uint256 tokenInPrice = uint256(uint224(_tokenInPrice));
+        uint256 expectedAmountOut = (amountIn * 10 ** 18) / tokenInPrice;
+        uint256 amountOutMinimum = (expectedAmountOut * (10000 - swapSlippageTolerance)) / 10000;
+
         ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
             tokenIn: tokenIn,
             tokenOut: address(WETH),
             recipient: address(this),
             deadline: block.timestamp,
             amountIn: amountIn,
-            amountOutMinimum: 0,
+            amountOutMinimum: amountOutMinimum,
             limitSqrtPrice: 0
         });
 
@@ -287,8 +295,10 @@ contract LiquidMode is
             recipient: address(this),
             deadline: block.timestamp,
             amountIn: amountIn,
-            amountOutMinimum: amountOutMinimum * 998 / 1000
+            amountOutMinimum: (amountOutMinimum * (10000 - swapSlippageTolerance)) / 10000
         });
+
+        swapRouter.exactInput(params);
     }
 
     function _investIdleFunds() internal {}
@@ -361,6 +371,16 @@ contract LiquidMode is
 
     function setWrsEthEthProxy(address _wrsEthEthProxy) external onlyOwner {
         wrsEthEthProxy = _wrsEthEthProxy;
+    }
+
+    function setLiquiditySlippageTolerance(uint256 _newTolerance) external onlyOwner {
+        require(_newTolerance <= 1000, "Liquidity slippage tolerance cannot exceed 10%");
+        liquiditySlippageTolerance = _newTolerance;
+    }
+
+    function setSwapSlippageTolerance(uint256 _newTolerance) external onlyOwner {
+        require(_newTolerance <= 500, "Swap slippage tolerance cannot exceed 5%");
+        swapSlippageTolerance = _newTolerance;
     }
 
     function deposit(uint256 assets, address receiver)
