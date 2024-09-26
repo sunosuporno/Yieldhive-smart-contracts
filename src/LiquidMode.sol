@@ -391,7 +391,7 @@ contract LiquidMode is
     }
 
     function setSwapSlippageTolerance(uint256 _newTolerance) external onlyOwner {
-        require(_newTolerance <= 500, "Swap slippage tolerance cannot exceed 5%");
+        require(_newTolerance <= 1000, "Swap slippage tolerance cannot exceed 10%");
         swapSlippageTolerance = _newTolerance;
     }
 
