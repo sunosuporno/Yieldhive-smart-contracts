@@ -308,8 +308,6 @@ contract LiquidMode is
         swapRouter.exactInput(params);
     }
 
-    function _investIdleFunds() internal {}
-
     function harvestReinvestAndReport() external nonReentrant onlyRole(HARVESTER_ROLE) {
         (uint256 amount0, uint256 amount1) = _collectKIMFees();
 
