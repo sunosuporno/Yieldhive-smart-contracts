@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import "forge-std/console.sol";
 import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -11,8 +12,6 @@ import {IERC20, IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extens
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {EnumerableSet} from "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
-import {IxRenzoDeposit} from "./interfaces/IxRenzoDeposit.sol";
-import {IRSETHPoolV2} from "./interfaces/IRSETHPoolV2.sol";
 import {IWETH9} from "./interfaces/IWETH9.sol";
 import "@api3/contracts/api3-server-v1/proxies/interfaces/IProxy.sol";
 import "@cryptoalgebra/integral-core/contracts/interfaces/IAlgebraPool.sol";
@@ -43,8 +42,6 @@ contract LiquidMode is
     using SafeERC20 for IERC20;
     using EnumerableSet for EnumerableSet.AddressSet;
 
-    IxRenzoDeposit public immutable xRenzoDeposit;
-    IRSETHPoolV2 public immutable rSETHPoolV2;
     ISwapRouter public immutable swapRouter;
 
     INonfungiblePositionManager public immutable nonfungiblePositionManager;
@@ -83,13 +80,15 @@ contract LiquidMode is
 
     IWETH9 public immutable WETH;
 
-    uint256 public liquiditySlippageTolerance = 200; // 2% default for liquidity operations
-    uint256 public swapSlippageTolerance = 100; // 1% default for swaps
+    uint256 public liquiditySlippageTolerance = 500; // 5% default for liquidity operations
+    uint256 public swapSlippageTolerance = 200; // 2% default for swaps
     uint256 public strategistFeePercentage = 2000; // 20% with 2 decimal places
     uint256 public managementFeePercentage = 100; // 1% annual fee with 2 decimal places
     uint256 public constant MAX_STRATEGIST_FEE_PERCENTAGE = 3000; // 30% maximum
     uint256 public constant MAX_MANAGEMENT_FEE_PERCENTAGE = 500; // 5% maximum
     uint256 public constant MANAGEMENT_FEE_INTERVAL = 365 days;
+    int24 public constant BOTTOM_TICK = -3360;
+    int24 public constant TOP_TICK = 3360;
 
     constructor(
         IERC20 asset_,
@@ -97,8 +96,6 @@ contract LiquidMode is
         string memory symbol_,
         address initialOwner,
         address _strategist,
-        address _xRenzoDeposit,
-        address _rSETHPoolV2,
         INonfungiblePositionManager _nonfungiblePositionManager,
         address _factory,
         address _poolDeployer,
@@ -107,7 +104,9 @@ contract LiquidMode is
         address _WETH,
         address _ezETHwrsETHPool,
         ISwapRouter _swapRouter,
-        address _treasury
+        address _treasury,
+        address _ezEthEthProxy,
+        address _wrsEthEthProxy
     )
         ERC4626(asset_)
         ERC20(name_, symbol_)
@@ -118,9 +117,6 @@ contract LiquidMode is
         _grantRole(HARVESTER_ROLE, initialOwner);
 
         strategist = _strategist;
-        xRenzoDeposit = IxRenzoDeposit(_xRenzoDeposit);
-        rSETHPoolV2 = IRSETHPoolV2(_rSETHPoolV2);
-
         nonfungiblePositionManager = _nonfungiblePositionManager;
         EZETH = _EZETH;
         WRSETH = _WRSETH;
@@ -128,6 +124,8 @@ contract LiquidMode is
         ezETHwrsETHPool = _ezETHwrsETHPool;
         swapRouter = _swapRouter;
         treasury = _treasury;
+        ezEthEthProxy = _ezEthEthProxy;
+        wrsEthEthProxy = _wrsEthEthProxy;
     }
 
     function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override {
@@ -135,21 +133,28 @@ contract LiquidMode is
         SafeERC20.safeTransferFrom(IERC20(assetAddress), caller, address(this), assets);
 
         // Unwrap WETH to ETH
-        WETH.deposit{value: assets}();
-
+        // WETH.withdraw(assets);
+        console.log("runnning0");
         _mint(receiver, shares);
-
+        console.log("runnning1");
         totalDeposits += assets;
         _totalAccountedAssets += assets;
-
+        console.log("runnning2");
         _investFunds(assets);
+        console.log("runnning3");
         emit Deposit(caller, receiver, assets, shares);
     }
 
     function _investFunds(uint256 amount) internal {
-        uint256 receivedEzETH = xRenzoDeposit.depositETH{value: amount / 2}(0, block.timestamp);
-        rSETHPoolV2.deposit{value: amount / 2}("");
-        uint256 receivedWRSETH = IERC20(WRSETH).balanceOf(address(this));
+        // uint256 receivedEzETH = xRenzoDeposit.depositETH{value: amount / 2}(0, block.timestamp);
+        // rSETHPoolV2.deposit{value: amount / 2}("");
+        console.log("runnning2-1");
+        uint256 receivedEzETH = _swapForToken(amount / 2, address(WETH), EZETH);
+        console.log("runnning2-2");
+        uint256 receivedWRSETH = _swapForToken(amount / 2, address(WETH), WRSETH);
+        console.log("runnning2-3");
+        console.log("receivedEzETH", receivedEzETH);
+        console.log("receivedWRSETH", receivedWRSETH);
         if (kimPosition.tokenId == 0) {
             _createKIMPosition(receivedEzETH, receivedWRSETH);
         } else {
@@ -167,12 +172,12 @@ contract LiquidMode is
         INonfungiblePositionManager.MintParams memory params = INonfungiblePositionManager.MintParams({
             token0: EZETH,
             token1: WRSETH,
-            tickLower: TickMath.MIN_TICK,
-            tickUpper: TickMath.MAX_TICK,
+            tickLower: BOTTOM_TICK,
+            tickUpper: TOP_TICK,
             amount0Desired: amount0,
             amount1Desired: amount1,
-            amount0Min: (amount0 * (10000 - liquiditySlippageTolerance)) / 10000,
-            amount1Min: (amount1 * (10000 - liquiditySlippageTolerance)) / 10000,
+            amount0Min: amount0 * (10000 - liquiditySlippageTolerance) / 10000,
+            amount1Min: amount1 * (10000 - liquiditySlippageTolerance) / 10000,
             recipient: address(this),
             deadline: block.timestamp
         });
@@ -205,6 +210,10 @@ contract LiquidMode is
         });
 
         (liquidity, addedAmount0, addedAmount1) = nonfungiblePositionManager.increaseLiquidity(params);
+
+        //update the struct
+        kimPosition =
+            KIMPosition({tokenId: kimTokenId, liquidity: liquidity, amount0: addedAmount0, amount1: addedAmount1});
     }
 
     function _removeLiquidityFromKIMPosition(uint256 amount0, uint256 amount1)
@@ -273,10 +282,24 @@ contract LiquidMode is
     function _swapForToken(uint256 amountIn, address tokenIn, address tokenOut) internal returns (uint256 amountOut) {
         TransferHelper.safeApprove(tokenIn, address(swapRouter), amountIn);
 
-        (int224 _tokenInPrice,) = readDataFeed(tokenIn);
-        uint256 tokenInPrice = uint256(uint224(_tokenInPrice));
-        uint256 expectedAmountOut = (amountIn * 10 ** 18) / tokenInPrice;
-        uint256 amountOutMinimum = (expectedAmountOut * (10000 - swapSlippageTolerance)) / 10000;
+        uint256 amountOutMinimum;
+        if (tokenIn == address(WETH)) {
+            console.log("runnning2-2-1");
+            // If WETH is the input token, use the price feed of the output token
+            (int224 _tokenOutPrice,) = readDataFeed(tokenOut == EZETH ? ezEthEthProxy : wrsEthEthProxy);
+            console.log("runnning2-2-2");
+            uint256 tokenOutPrice = uint256(uint224(_tokenOutPrice));
+            console.log("runnning2-2-3");
+            uint256 expectedAmountOut = ((amountIn * 1e18) / tokenOutPrice) / 1e18;
+            console.log("runnning2-2-4");
+            amountOutMinimum = (expectedAmountOut * (10000 - swapSlippageTolerance)) / 10000;
+        } else {
+            // Original logic for non-WETH input tokens
+            (int224 _tokenInPrice,) = readDataFeed(tokenIn == EZETH ? ezEthEthProxy : wrsEthEthProxy);
+            uint256 tokenInPrice = uint256(uint224(_tokenInPrice));
+            uint256 expectedAmountOut = (amountIn * tokenInPrice) / 1e18;
+            amountOutMinimum = (expectedAmountOut * (10000 - swapSlippageTolerance)) / 10000;
+        }
 
         ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
             tokenIn: tokenIn,
@@ -340,8 +363,6 @@ contract LiquidMode is
             _addLiquidityToKIMPosition(currentEzETHBalance, currentWrsETHBalance);
         }
     }
-
-    // ... existing code ...
 
     function performMaintenance() external nonReentrant onlyRole(HARVESTER_ROLE) {
         // Check balances

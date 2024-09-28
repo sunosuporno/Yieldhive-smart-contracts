@@ -24,8 +24,6 @@ contract LiquidModeScript is Script {
             "LMT", // symbol_
             address(0x07a721260416e764618B059811eaf099a940Af14), // initialOwner
             address(0x6A0a7c97c3B6e9fBdA3626ED15A244aDa74A54CF), // _strategist
-            address(0x4D7572040B84b41a6AA2efE4A93eFFF182388F88), // _xRenzoDeposit
-            address(0xbDf612E616432AA8e8D7d8cC1A9c934025371c5C), // _rSETHPoolV2
             INonfungiblePositionManager(address(0x2e8614625226D26180aDf6530C3b1677d3D7cf10)), // _nonfungiblePositionManager
             address(0xB5F00c2C5f8821155D8ed27E31932CFD9DB3C5D5), // _factory
             address(0x6414A461B19726410E52488d9D5ff33682701635), // _poolDeployer
@@ -34,7 +32,9 @@ contract LiquidModeScript is Script {
             address(0x4200000000000000000000000000000000000006), // _WETH
             address(0xCC29E407a272F2CC817DB9fBfF7e6FdA6536Fc0e), // _ezETHwrsETHPool
             ISwapRouter(address(0xAc48FcF1049668B285f3dC72483DF5Ae2162f7e8)), // _swapRouter
-            address(0x273dFa01f5605b8c41d6CE1146ed0911FDC5ad07) // _treasury
+            address(0x273dFa01f5605b8c41d6CE1146ed0911FDC5ad07), // _treasury
+            address(0x3621b06BfFE478eB481adf65bbF139A052Ed7321), // _ezEthEthProxy
+            address(0xc30e51C9EDD92B9eeF45f281c712faaAf59912BA) // _wrsEthEthProxy
         );
 
         console.log("LiquidMode deployed at:", address(liquidMode));
