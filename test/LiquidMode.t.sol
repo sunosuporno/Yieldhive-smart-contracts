@@ -9,6 +9,7 @@ import {INonfungiblePositionManager} from
 import {ISwapRouter} from "@cryptoalgebra/integral-periphery/contracts/interfaces/ISwapRouter.sol";
 import {IWETH9} from "../src/interfaces/IWETH9.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
+import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
 
 contract LiquidModeTest is Test {
     LiquidMode public liquidMode;
@@ -432,6 +433,30 @@ contract LiquidModeTest is Test {
         }
 
         vm.stopPrank();
+    }
+
+    function testDepositUnauthorizedToken() public {
+        // Use ezETH as the unauthorized token
+        address unauthorizedToken = EZETH;
+
+        // Mint some ezETH to the user
+        uint256 depositAmount = 1 ether;
+        deal(unauthorizedToken, user, depositAmount);
+
+        vm.startPrank(user);
+
+        // Approve the unauthorized token
+        IERC20(unauthorizedToken).approve(address(liquidMode), depositAmount);
+
+        // Try to deposit the unauthorized token
+        vm.expectRevert();
+        liquidMode.deposit(depositAmount, user);
+
+        vm.stopPrank();
+
+        // Verify that no deposit was made
+        assertEq(liquidMode.balanceOf(user), 0, "User should have no shares");
+        assertEq(liquidMode.totalAssets(), 0, "Total assets should remain unchanged");
     }
 
     // function testInitialDeposit() public {
