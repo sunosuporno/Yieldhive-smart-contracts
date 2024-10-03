@@ -56,18 +56,11 @@ contract Vault_StrategyScript is Script {
         );
 
         // Deploy the TransparentUpgradeableProxy
-        proxy = new TransparentUpgradeableProxy(
-            address(vaultStrategyImplementation),
-            address(proxyAdmin),
-            initData
-        );
+        proxy = new TransparentUpgradeableProxy(address(vaultStrategyImplementation), address(proxyAdmin), initData);
 
         // The proxy address is now the address of your upgradeable VaultStrategy
         console.log("Upgradeable VaultStrategy deployed at:", address(proxy));
-        console.log(
-            "Implementation address:",
-            address(vaultStrategyImplementation)
-        );
+        console.log("Implementation address:", address(vaultStrategyImplementation));
         console.log("ProxyAdmin address:", address(proxyAdmin));
 
         vm.stopBroadcast();

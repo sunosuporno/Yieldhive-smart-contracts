@@ -19,6 +19,7 @@ import {ISwapRouter02, IV3SwapRouter} from "./interfaces/ISwapRouter.sol";
 contract Looptimism is ERC4626, Ownable {
     using Math for uint256;
     using SafeERC20 for IERC20;
+
     IPyth pyth;
     IPoolAave aavePool;
     IPoolDataProvider aaveProtocolDataProvider;
@@ -27,18 +28,14 @@ contract Looptimism is ERC4626, Ownable {
     ISwapRouter02 public immutable swapRouter;
 
     uint256 public _totalAccountedAssets;
-    bytes32 public constant usdcUsdPriceFeedId =
-        0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a;
-    bytes32 public constant wbtcPriceFeedId =
-        0xc9d8b075a5c69303365ae23633d4e085199bf5c520a3b90fed1322a0342ffc33;
-    address public constant swapRouterAddress =
-        0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45;
+    bytes32 public constant usdcUsdPriceFeedId = 0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a;
+    bytes32 public constant wbtcPriceFeedId = 0xc9d8b075a5c69303365ae23633d4e085199bf5c520a3b90fed1322a0342ffc33;
+    address public constant swapRouterAddress = 0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45;
     address public constant usdc = 0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85;
     address public constant wbtc = 0x68f180fcCe6836688e9084f035309E29Bf0A2095;
     address public constant WETH9 = 0x4200000000000000000000000000000000000006;
     address public constant aUSDC = 0x38d693cE1dF5AaDF7bC62595A37D667aD57922e5;
-    address public constant variableDebtWbtc =
-        0x92b42c66840C7AD907b4BF74879FF3eF7c529473;
+    address public constant variableDebtWbtc = 0x92b42c66840C7AD907b4BF74879FF3eF7c529473;
     uint256 public previousAUSDCBalance;
     uint256 public previousVariableDebtBalance;
 
@@ -56,27 +53,15 @@ contract Looptimism is ERC4626, Ownable {
         // asset_.safeTransferFrom(msg.sender, address(this), _initialDeposit);
         pyth = IPyth(pythContract);
         aavePool = IPoolAave(aavePoolContract);
-        aaveProtocolDataProvider = IPoolDataProvider(
-            aaveProtocolDataProviderContract
-        );
+        aaveProtocolDataProvider = IPoolDataProvider(aaveProtocolDataProviderContract);
         pythPriceUpdater = IPythPriceUpdater(pythPriceUpdaterContract);
         swapRouter = ISwapRouter02(swapRouterAddress);
     }
 
-    function _deposit(
-        address caller,
-        address receiver,
-        uint256 assets,
-        uint256 shares
-    ) internal override {
+    function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override {
         address assetAddress = asset();
         // Transfer the assets from the caller to this contract
-        SafeERC20.safeTransferFrom(
-            IERC20(assetAddress),
-            caller,
-            address(this),
-            assets
-        );
+        SafeERC20.safeTransferFrom(IERC20(assetAddress), caller, address(this), assets);
 
         // Mint shares to the receiver
         _mint(receiver, shares);
@@ -98,10 +83,7 @@ contract Looptimism is ERC4626, Ownable {
         }
     }
 
-    function _investLoop(
-        uint256 usdcAmount,
-        bool shouldBorrow
-    ) internal returns (uint256) {
+    function _investLoop(uint256 usdcAmount, bool shouldBorrow) internal returns (uint256) {
         bytes32[] memory priceFeedIds = new bytes32[](2);
         priceFeedIds[0] = wbtcPriceFeedId;
         priceFeedIds[1] = usdcUsdPriceFeedId;
@@ -116,17 +98,13 @@ contract Looptimism is ERC4626, Ownable {
         if (shouldBorrow) {
             uint256 usdcAmountIn8Decimals = usdcAmount * 10 ** 2;
             // Finding total price of the asset supplied in USD
-            uint256 usdcAmountIn8DecimalsInUSD = (usdcAmountIn8Decimals *
-                (usdcPriceInUSD)) / 10 ** 8;
+            uint256 usdcAmountIn8DecimalsInUSD = (usdcAmountIn8Decimals * (usdcPriceInUSD)) / 10 ** 8;
             // Fetching LTV of USDC from Aave
-            (, uint256 ltv, , , , , , , , ) = aaveProtocolDataProvider
-                .getReserveConfigurationData(address(usdc));
+            (, uint256 ltv,,,,,,,,) = aaveProtocolDataProvider.getReserveConfigurationData(address(usdc));
             // Calculating the maximum loan amount in USD
-            uint256 maxLoanAmountIn8DecimalsInUSD = (usdcAmountIn8DecimalsInUSD *
-                    ltv) / 10 ** 4;
+            uint256 maxLoanAmountIn8DecimalsInUSD = (usdcAmountIn8DecimalsInUSD * ltv) / 10 ** 4;
             // Calculating the maximum amount of cbETH that can be borrowed
-            uint256 wbtcAbleToBorrow = (maxLoanAmountIn8DecimalsInUSD *
-                10 ** 8) / wbtcPriceInUSD;
+            uint256 wbtcAbleToBorrow = (maxLoanAmountIn8DecimalsInUSD * 10 ** 8) / wbtcPriceInUSD;
             // Borrowing cbETH after calculating a safe amount
             uint256 safeAmount = (wbtcAbleToBorrow * 95) / 100;
             aavePool.borrow(address(wbtc), safeAmount, 2, 0, address(this));
@@ -150,22 +128,16 @@ contract Looptimism is ERC4626, Ownable {
 
         // Get current balances
         uint256 currentAUSDCBalance = IERC20(aUSDC).balanceOf(address(this));
-        uint256 currentVariableDebtBalance = IERC20(variableDebtWbtc).balanceOf(
-            address(this)
-        );
+        uint256 currentVariableDebtBalance = IERC20(variableDebtWbtc).balanceOf(address(this));
 
         // Calculate the change in balances
-        uint256 borrowedWbtcChange = currentVariableDebtBalance -
-            previousVariableDebtBalance;
+        uint256 borrowedWbtcChange = currentVariableDebtBalance - previousVariableDebtBalance;
 
         // Calculate the net gain in Aave
-        uint256 suppliedUSDCValueChange = currentAUSDCBalance -
-            previousAUSDCBalance;
-        uint256 borrowedWbtcValueChangeInUSDC = (wbtcPriceInUSD *
-            borrowedWbtcChange) / (usdcPriceInUSD * 10 ** 2);
+        uint256 suppliedUSDCValueChange = currentAUSDCBalance - previousAUSDCBalance;
+        uint256 borrowedWbtcValueChangeInUSDC = (wbtcPriceInUSD * borrowedWbtcChange) / (usdcPriceInUSD * 10 ** 2);
 
-        int256 aaveNetGain = int256(suppliedUSDCValueChange) -
-            int256(borrowedWbtcValueChangeInUSDC);
+        int256 aaveNetGain = int256(suppliedUSDCValueChange) - int256(borrowedWbtcValueChangeInUSDC);
 
         // Update the previous balances
         previousAUSDCBalance = currentAUSDCBalance;
@@ -179,55 +151,38 @@ contract Looptimism is ERC4626, Ownable {
         }
     }
 
-    function _swap(
-        address tokenIn,
-        address tokenOut,
-        uint256 fee1,
-        uint256 fee2,
-        uint256 amountIn
-    ) internal returns (uint256 amountOut) {
+    function _swap(address tokenIn, address tokenOut, uint256 fee1, uint256 fee2, uint256 amountIn)
+        internal
+        returns (uint256 amountOut)
+    {
         TransferHelper.safeApprove(tokenIn, address(swapRouter), amountIn);
 
-        bytes memory path = abi.encodePacked(
-            tokenIn,
-            uint24(fee1),
-            WETH9,
-            uint24(fee2),
-            tokenOut
-        );
+        bytes memory path = abi.encodePacked(tokenIn, uint24(fee1), WETH9, uint24(fee2), tokenOut);
 
-        IV3SwapRouter.ExactInputParams memory params = IV3SwapRouter
-            .ExactInputParams({
-                path: path,
-                recipient: address(this),
-                amountIn: amountIn,
-                amountOutMinimum: 0
-            });
+        IV3SwapRouter.ExactInputParams memory params = IV3SwapRouter.ExactInputParams({
+            path: path,
+            recipient: address(this),
+            amountIn: amountIn,
+            amountOutMinimum: 0
+        });
 
         amountOut = swapRouter.exactInput(params);
     }
 
-    function _swapwbtcToUSDC(
-        uint256 amountIn
-    ) internal returns (uint256 amountOut) {
+    function _swapwbtcToUSDC(uint256 amountIn) internal returns (uint256 amountOut) {
         amountOut = _swap(wbtc, asset(), 500, 500, amountIn);
     }
 
-    function getPricePyth(
-        bytes32[] memory priceFeedIds
-    ) public payable returns (uint256[] memory) {
+    function getPricePyth(bytes32[] memory priceFeedIds) public payable returns (uint256[] memory) {
         bytes[] memory priceUpdate = pythPriceUpdater.getPricePyth();
-        uint fee = pyth.getUpdateFee(priceUpdate);
+        uint256 fee = pyth.getUpdateFee(priceUpdate);
         pyth.updatePriceFeeds{value: fee}(priceUpdate);
 
         uint256[] memory prices = new uint256[](priceFeedIds.length);
 
         // Read the current price from each price feed if it is less than 60 seconds old.
-        for (uint i = 0; i < priceFeedIds.length; i++) {
-            PythStructs.Price memory pythPrice = pyth.getPriceNoOlderThan(
-                priceFeedIds[i],
-                120
-            );
+        for (uint256 i = 0; i < priceFeedIds.length; i++) {
+            PythStructs.Price memory pythPrice = pyth.getPriceNoOlderThan(priceFeedIds[i], 120);
 
             // Convert the price to a uint256 value
             // The price is stored as a signed integer with a specific exponent

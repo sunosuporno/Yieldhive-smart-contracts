@@ -10,12 +10,10 @@ interface IV2SwapRouter {
     /// @param path The ordered list of tokens to swap through
     /// @param to The recipient address
     /// @return amountOut The amount of the received token
-    function swapExactTokensForTokens(
-        uint256 amountIn,
-        uint256 amountOutMin,
-        address[] calldata path,
-        address to
-    ) external payable returns (uint256 amountOut);
+    function swapExactTokensForTokens(uint256 amountIn, uint256 amountOutMin, address[] calldata path, address to)
+        external
+        payable
+        returns (uint256 amountOut);
 
     /// @notice Swaps as little as possible of one token for an exact amount of another token
     /// @param amountOut The amount of token to swap for
@@ -23,12 +21,10 @@ interface IV2SwapRouter {
     /// @param path The ordered list of tokens to swap through
     /// @param to The recipient address
     /// @return amountIn The amount of token to pay
-    function swapTokensForExactTokens(
-        uint256 amountOut,
-        uint256 amountInMax,
-        address[] calldata path,
-        address to
-    ) external payable returns (uint256 amountIn);
+    function swapTokensForExactTokens(uint256 amountOut, uint256 amountInMax, address[] calldata path, address to)
+        external
+        payable
+        returns (uint256 amountIn);
 }
 
 interface IUniswapV3SwapCallback {
@@ -41,11 +37,7 @@ interface IUniswapV3SwapCallback {
     /// @param amount1Delta The amount of token1 that was sent (negative) or must be received (positive) by the pool by
     /// the end of the swap. If positive, the callback must send that amount of token1 to the pool.
     /// @param data Any data passed through by the caller via the IUniswapV3PoolActions#swap call
-    function uniswapV3SwapCallback(
-        int256 amount0Delta,
-        int256 amount1Delta,
-        bytes calldata data
-    ) external;
+    function uniswapV3SwapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata data) external;
 }
 
 interface IV3SwapRouter is IUniswapV3SwapCallback {
@@ -64,9 +56,7 @@ interface IV3SwapRouter is IUniswapV3SwapCallback {
     /// and swap the entire amount, enabling contracts to send tokens before calling this function.
     /// @param params The parameters necessary for the swap, encoded as `ExactInputSingleParams` in calldata
     /// @return amountOut The amount of the received token
-    function exactInputSingle(
-        ExactInputSingleParams calldata params
-    ) external payable returns (uint256 amountOut);
+    function exactInputSingle(ExactInputSingleParams calldata params) external payable returns (uint256 amountOut);
 
     struct ExactInputParams {
         bytes path;
@@ -80,9 +70,7 @@ interface IV3SwapRouter is IUniswapV3SwapCallback {
     /// and swap the entire amount, enabling contracts to send tokens before calling this function.
     /// @param params The parameters necessary for the multi-hop swap, encoded as `ExactInputParams` in calldata
     /// @return amountOut The amount of the received token
-    function exactInput(
-        ExactInputParams calldata params
-    ) external payable returns (uint256 amountOut);
+    function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut);
 
     struct ExactOutputSingleParams {
         address tokenIn;
@@ -98,9 +86,7 @@ interface IV3SwapRouter is IUniswapV3SwapCallback {
     /// that may remain in the router after the swap.
     /// @param params The parameters necessary for the swap, encoded as `ExactOutputSingleParams` in calldata
     /// @return amountIn The amount of the input token
-    function exactOutputSingle(
-        ExactOutputSingleParams calldata params
-    ) external payable returns (uint256 amountIn);
+    function exactOutputSingle(ExactOutputSingleParams calldata params) external payable returns (uint256 amountIn);
 
     struct ExactOutputParams {
         bytes path;
@@ -113,9 +99,7 @@ interface IV3SwapRouter is IUniswapV3SwapCallback {
     /// that may remain in the router after the swap.
     /// @param params The parameters necessary for the multi-hop swap, encoded as `ExactOutputParams` in calldata
     /// @return amountIn The amount of the input token
-    function exactOutput(
-        ExactOutputParams calldata params
-    ) external payable returns (uint256 amountIn);
+    function exactOutput(ExactOutputParams calldata params) external payable returns (uint256 amountIn);
 }
 
 interface IApproveAndCall {
@@ -131,10 +115,7 @@ interface IApproveAndCall {
     /// @param token The token to approve
     /// @param amount The amount to approve
     /// @return The required approval type
-    function getApprovalType(
-        address token,
-        uint256 amount
-    ) external returns (ApprovalType);
+    function getApprovalType(address token, uint256 amount) external returns (ApprovalType);
 
     /// @notice Approves a token for the maximum possible amount
     /// @param token The token to approve
@@ -155,9 +136,7 @@ interface IApproveAndCall {
     /// @notice Calls the position manager with arbitrary calldata
     /// @param data Calldata to pass along to the position manager
     /// @return result The result from the call
-    function callPositionManager(
-        bytes memory data
-    ) external payable returns (bytes memory result);
+    function callPositionManager(bytes memory data) external payable returns (bytes memory result);
 
     struct MintParams {
         address token0;
@@ -173,9 +152,7 @@ interface IApproveAndCall {
     /// @notice Calls the position manager's mint function
     /// @param params Calldata to pass along to the position manager
     /// @return result The result from the call
-    function mint(
-        MintParams calldata params
-    ) external payable returns (bytes memory result);
+    function mint(MintParams calldata params) external payable returns (bytes memory result);
 
     struct IncreaseLiquidityParams {
         address token0;
@@ -188,9 +165,10 @@ interface IApproveAndCall {
     /// @notice Calls the position manager's increaseLiquidity function
     /// @param params Calldata to pass along to the position manager
     /// @return result The result from the call
-    function increaseLiquidity(
-        IncreaseLiquidityParams calldata params
-    ) external payable returns (bytes memory result);
+    function increaseLiquidity(IncreaseLiquidityParams calldata params)
+        external
+        payable
+        returns (bytes memory result);
 }
 
 interface IMulticall {
@@ -198,9 +176,7 @@ interface IMulticall {
     /// @dev The `msg.value` should not be trusted for any method callable from multicall.
     /// @param data The encoded function data for each of the calls to make to this contract
     /// @return results The results from each of the calls passed in via data
-    function multicall(
-        bytes[] calldata data
-    ) external payable returns (bytes[] memory results);
+    function multicall(bytes[] calldata data) external payable returns (bytes[] memory results);
 }
 
 interface IMulticallExtended is IMulticall {
@@ -209,20 +185,17 @@ interface IMulticallExtended is IMulticall {
     /// @param deadline The time by which this function must be called before failing
     /// @param data The encoded function data for each of the calls to make to this contract
     /// @return results The results from each of the calls passed in via data
-    function multicall(
-        uint256 deadline,
-        bytes[] calldata data
-    ) external payable returns (bytes[] memory results);
+    function multicall(uint256 deadline, bytes[] calldata data) external payable returns (bytes[] memory results);
 
     /// @notice Call multiple functions in the current contract and return the data from all of them if they all succeed
     /// @dev The `msg.value` should not be trusted for any method callable from multicall.
     /// @param previousBlockhash The expected parent blockHash
     /// @param data The encoded function data for each of the calls to make to this contract
     /// @return results The results from each of the calls passed in via data
-    function multicall(
-        bytes32 previousBlockhash,
-        bytes[] calldata data
-    ) external payable returns (bytes[] memory results);
+    function multicall(bytes32 previousBlockhash, bytes[] calldata data)
+        external
+        payable
+        returns (bytes[] memory results);
 }
 
 interface ISelfPermit {
@@ -234,14 +207,9 @@ interface ISelfPermit {
     /// @param v Must produce valid secp256k1 signature from the holder along with `r` and `s`
     /// @param r Must produce valid secp256k1 signature from the holder along with `v` and `s`
     /// @param s Must produce valid secp256k1 signature from the holder along with `r` and `v`
-    function selfPermit(
-        address token,
-        uint256 value,
-        uint256 deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
-    ) external payable;
+    function selfPermit(address token, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s)
+        external
+        payable;
 
     /// @notice Permits this contract to spend a given token from `msg.sender`
     /// @dev The `owner` is always msg.sender and the `spender` is always address(this).
@@ -252,14 +220,9 @@ interface ISelfPermit {
     /// @param v Must produce valid secp256k1 signature from the holder along with `r` and `s`
     /// @param r Must produce valid secp256k1 signature from the holder along with `v` and `s`
     /// @param s Must produce valid secp256k1 signature from the holder along with `r` and `v`
-    function selfPermitIfNecessary(
-        address token,
-        uint256 value,
-        uint256 deadline,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
-    ) external payable;
+    function selfPermitIfNecessary(address token, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s)
+        external
+        payable;
 
     /// @notice Permits this contract to spend the sender's tokens for permit signatures that have the `allowed` parameter
     /// @dev The `owner` is always msg.sender and the `spender` is always address(this)
@@ -269,14 +232,9 @@ interface ISelfPermit {
     /// @param v Must produce valid secp256k1 signature from the holder along with `r` and `s`
     /// @param r Must produce valid secp256k1 signature from the holder along with `v` and `s`
     /// @param s Must produce valid secp256k1 signature from the holder along with `r` and `v`
-    function selfPermitAllowed(
-        address token,
-        uint256 nonce,
-        uint256 expiry,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
-    ) external payable;
+    function selfPermitAllowed(address token, uint256 nonce, uint256 expiry, uint8 v, bytes32 r, bytes32 s)
+        external
+        payable;
 
     /// @notice Permits this contract to spend the sender's tokens for permit signatures that have the `allowed` parameter
     /// @dev The `owner` is always msg.sender and the `spender` is always address(this)
@@ -287,20 +245,9 @@ interface ISelfPermit {
     /// @param v Must produce valid secp256k1 signature from the holder along with `r` and `s`
     /// @param r Must produce valid secp256k1 signature from the holder along with `v` and `s`
     /// @param s Must produce valid secp256k1 signature from the holder along with `r` and `v`
-    function selfPermitAllowedIfNecessary(
-        address token,
-        uint256 nonce,
-        uint256 expiry,
-        uint8 v,
-        bytes32 r,
-        bytes32 s
-    ) external payable;
+    function selfPermitAllowedIfNecessary(address token, uint256 nonce, uint256 expiry, uint8 v, bytes32 r, bytes32 s)
+        external
+        payable;
 }
 
-interface ISwapRouter02 is
-    IV2SwapRouter,
-    IV3SwapRouter,
-    IApproveAndCall,
-    IMulticallExtended,
-    ISelfPermit
-{}
+interface ISwapRouter02 is IV2SwapRouter, IV3SwapRouter, IApproveAndCall, IMulticallExtended, ISelfPermit {}

@@ -15,10 +15,7 @@ interface IAaveOracle is IPriceOracleGetter {
      * @param baseCurrency The base currency of used for price quotes
      * @param baseCurrencyUnit The unit of the base currency
      */
-    event BaseCurrencySet(
-        address indexed baseCurrency,
-        uint256 baseCurrencyUnit
-    );
+    event BaseCurrencySet(address indexed baseCurrency, uint256 baseCurrencyUnit);
 
     /**
      * @dev Emitted after the price source of an asset is updated
@@ -37,20 +34,14 @@ interface IAaveOracle is IPriceOracleGetter {
      * @notice Returns the PoolAddressesProvider
      * @return The address of the PoolAddressesProvider contract
      */
-    function ADDRESSES_PROVIDER()
-        external
-        view
-        returns (IPoolAddressesProvider);
+    function ADDRESSES_PROVIDER() external view returns (IPoolAddressesProvider);
 
     /**
      * @notice Sets or replaces price sources of assets
      * @param assets The addresses of the assets
      * @param sources The addresses of the price sources
      */
-    function setAssetSources(
-        address[] calldata assets,
-        address[] calldata sources
-    ) external;
+    function setAssetSources(address[] calldata assets, address[] calldata sources) external;
 
     /**
      * @notice Sets the fallback oracle
@@ -63,9 +54,7 @@ interface IAaveOracle is IPriceOracleGetter {
      * @param assets The list of assets addresses
      * @return The prices of the given assets
      */
-    function getAssetsPrices(
-        address[] calldata assets
-    ) external view returns (uint256[] memory);
+    function getAssetsPrices(address[] calldata assets) external view returns (uint256[] memory);
 
     /**
      * @notice Returns the address of the source for an asset address
