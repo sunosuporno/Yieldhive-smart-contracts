@@ -512,9 +512,7 @@ contract LiquidModeTest is Test {
         );
 
         assertEq(
-            initialUserShares - finalUserShares,
-            sharesRedeemed,
-            "User's shares should decrease by the correct amount"
+            initialUserShares - finalUserShares, sharesRedeemed, "User's shares should decrease by the correct amount"
         );
         assertGt(sharesRedeemed, 0, "Shares redeemed should be greater than 0");
 
@@ -1152,7 +1150,9 @@ contract LiquidModeTest is Test {
 
         // Calculate the expected increase, accounting for strategist fee
         uint256 expectedIncrease = (yieldAmountInETH * 80) / 100; // 80% of yield (20% goes to strategist)
-        assertApproxEqRel(actualIncrease, expectedIncrease, 0.02e18, "Actual increase should be close to expected increase");
+        assertApproxEqRel(
+            actualIncrease, expectedIncrease, 0.02e18, "Actual increase should be close to expected increase"
+        );
 
         vm.roll(block.number + 10);
         vm.clearMockedCalls();
@@ -1167,7 +1167,9 @@ contract LiquidModeTest is Test {
         assertApproxEqRel(withdrawnAmount, newTotalAssets, 0.02e18, "Withdrawn amount should be close to total assets");
 
         // Verify user's balance
-        assertApproxEqRel(IERC20(WETH).balanceOf(user), expectedFinalBalance, 0.02e18, "User balance should be close to total assets");
+        assertApproxEqRel(
+            IERC20(WETH).balanceOf(user), expectedFinalBalance, 0.02e18, "User balance should be close to total assets"
+        );
 
         // Verify withdrawn amount
         assertApproxEqRel(withdrawnAmount, newTotalAssets, 0.02e18, "Withdrawn amount should be close to total assets");
@@ -1223,8 +1225,8 @@ contract LiquidModeTest is Test {
         uint256 wrsETHPrice = uint256(uint224(_wrsETHPrice));
 
         //convert to ETH
-        uint256 feeAmount0InETH = (1.25 ether * ezETHPrice) /10 ** 18 ;
-        uint256 feeAmount1InETH = (1.25 ether * wrsETHPrice) /10 ** 18 ;
+        uint256 feeAmount0InETH = (1.25 ether * ezETHPrice) / 10 ** 18;
+        uint256 feeAmount1InETH = (1.25 ether * wrsETHPrice) / 10 ** 18;
 
         // Setup initial deposit
         vm.startPrank(user);
@@ -1249,7 +1251,6 @@ contract LiquidModeTest is Test {
         vm.prank(liquidMode.owner());
         liquidMode.harvestReinvestAndReport();
 
-
         console.log("feeAmount0InETH", feeAmount0InETH);
         console.log("feeAmount1InETH", feeAmount1InETH);
         // Assertions
@@ -1260,11 +1261,15 @@ contract LiquidModeTest is Test {
         uint256 netIncrease = expectedMinIncrease - strategistFee;
         console.log("netIncrease", netIncrease);
         uint256 actualIncrease = liquidMode.totalAssets() - depositAmount;
-        assertApproxEqRel(actualIncrease, netIncrease, 0.02e18, "Total assets should have increased by at least 98% of collected fees");
+        assertApproxEqRel(
+            actualIncrease, netIncrease, 0.02e18, "Total assets should have increased by at least 98% of collected fees"
+        );
 
         uint256 accumulatedFee = liquidMode.accumulatedStrategistFee();
         assertGt(accumulatedFee, 0, "Accumulated strategist fee should be non-zero");
-        assertApproxEqRel(accumulatedFee, strategistFee, 0.02e18, "Accumulated strategist fee should not exceed 2% of collected fees");
+        assertApproxEqRel(
+            accumulatedFee, strategistFee, 0.02e18, "Accumulated strategist fee should not exceed 2% of collected fees"
+        );
     }
 
     function testHarvestReinvestAndReportOnlyEzETHFees() public {
@@ -1301,7 +1306,7 @@ contract LiquidModeTest is Test {
         liquidMode.harvestReinvestAndReport();
 
         console.log("feeAmount0InETH", feeAmount0InETH);
-        
+
         // Assertions
         uint256 expectedMinIncrease = feeAmount0InETH;
         console.log("expectedMinIncrease", expectedMinIncrease);
@@ -1310,11 +1315,18 @@ contract LiquidModeTest is Test {
         uint256 netIncrease = expectedMinIncrease - strategistFee;
         console.log("netIncrease", netIncrease);
         uint256 actualIncrease = liquidMode.totalAssets() - depositAmount;
-        assertApproxEqRel(actualIncrease, netIncrease, 0.02e18, "Total assets should have increased by at least 98% of collected fees");
+        assertApproxEqRel(
+            actualIncrease, netIncrease, 0.02e18, "Total assets should have increased by at least 98% of collected fees"
+        );
 
         uint256 accumulatedFee = liquidMode.accumulatedStrategistFee();
         assertGt(accumulatedFee, 0, "Accumulated strategist fee should be non-zero");
-        assertApproxEqRel(accumulatedFee, strategistFee, 0.02e18, "Accumulated strategist fee should be close to 20% of collected fees");
+        assertApproxEqRel(
+            accumulatedFee,
+            strategistFee,
+            0.02e18,
+            "Accumulated strategist fee should be close to 20% of collected fees"
+        );
     }
 
     function testHarvestReinvestAndReportNoFees() public {
@@ -1417,47 +1429,47 @@ contract LiquidModeTest is Test {
     }
 
     function testPerformMaintenanceWithWETH() public {
-    // Setup: Deposit some funds and add extra WETH
-    uint256 depositAmount = 10 ether;
-    uint256 extraWETH = 0.5 ether;
+        // Setup: Deposit some funds and add extra WETH
+        uint256 depositAmount = 10 ether;
+        uint256 extraWETH = 0.5 ether;
 
-    // Deposit funds
-    vm.startPrank(user);
-    IERC20(WETH).approve(address(liquidMode), depositAmount);
-    liquidMode.deposit(depositAmount, user);
-    vm.stopPrank();
+        // Deposit funds
+        vm.startPrank(user);
+        IERC20(WETH).approve(address(liquidMode), depositAmount);
+        liquidMode.deposit(depositAmount, user);
+        vm.stopPrank();
 
-    // Deal extra WETH directly to the contract
-    deal(address(WETH), address(liquidMode), extraWETH);
+        // Deal extra WETH directly to the contract
+        deal(address(WETH), address(liquidMode), extraWETH);
 
-    // Record initial state
-    uint256 initialWETHBalance = IERC20(WETH).balanceOf(address(liquidMode));
-    uint256 initialEzETHBalance = IERC20(liquidMode.EZETH()).balanceOf(address(liquidMode));
-    uint256 initialWrsETHBalance = IERC20(liquidMode.WRSETH()).balanceOf(address(liquidMode));
-    (, uint128 initialLiquidity,,) = liquidMode.getKimPosition();
-    uint256 initialTotalAssets = liquidMode.totalAssets();
+        // Record initial state
+        uint256 initialWETHBalance = IERC20(WETH).balanceOf(address(liquidMode));
+        uint256 initialEzETHBalance = IERC20(liquidMode.EZETH()).balanceOf(address(liquidMode));
+        uint256 initialWrsETHBalance = IERC20(liquidMode.WRSETH()).balanceOf(address(liquidMode));
+        (, uint128 initialLiquidity,,) = liquidMode.getKimPosition();
+        uint256 initialTotalAssets = liquidMode.totalAssets();
 
-    console.log("Initial WETH balance:", initialWETHBalance);
-    console.log("Initial ezETH balance:", initialEzETHBalance);
-    console.log("Initial wrsETH balance:", initialWrsETHBalance);
-    console.log("Initial liquidity:", initialLiquidity);
-    console.log("Initial total assets:", initialTotalAssets);
+        console.log("Initial WETH balance:", initialWETHBalance);
+        console.log("Initial ezETH balance:", initialEzETHBalance);
+        console.log("Initial wrsETH balance:", initialWrsETHBalance);
+        console.log("Initial liquidity:", initialLiquidity);
+        console.log("Initial total assets:", initialTotalAssets);
 
-    // Perform maintenance
-    vm.prank(liquidMode.owner());
-    liquidMode.performMaintenance();
+        // Perform maintenance
+        vm.prank(liquidMode.owner());
+        liquidMode.performMaintenance();
 
-    // Check final state
-    uint256 finalWETHBalance = IERC20(WETH).balanceOf(address(liquidMode));
-    (, uint128 finalLiquidity,,) = liquidMode.getKimPosition();
-    uint256 finalTotalAssets = liquidMode.totalAssets();
+        // Check final state
+        uint256 finalWETHBalance = IERC20(WETH).balanceOf(address(liquidMode));
+        (, uint128 finalLiquidity,,) = liquidMode.getKimPosition();
+        uint256 finalTotalAssets = liquidMode.totalAssets();
 
-    // Assertions
-    assertEq(finalWETHBalance, 0, "All WETH should be converted");
-    assertGt(finalLiquidity, initialLiquidity, "Liquidity should increase");
-    assertGe(finalTotalAssets, initialTotalAssets, "Total assets should not decrease");
+        // Assertions
+        assertEq(finalWETHBalance, 0, "All WETH should be converted");
+        assertGt(finalLiquidity, initialLiquidity, "Liquidity should increase");
+        assertGe(finalTotalAssets, initialTotalAssets, "Total assets should not decrease");
 
-    // Log final state
+        // Log final state
         console.log("Final WETH balance:", finalWETHBalance);
         console.log("Final total assets:", finalTotalAssets);
     }
@@ -1513,5 +1525,67 @@ contract LiquidModeTest is Test {
         console.log("Final wrsETH balance:", finalWrsETHBalance);
         console.log("Final liquidity:", finalLiquidity);
         console.log("Final total assets:", finalTotalAssets);
+    }
+
+    function testClaimStrategistFees() public {
+        // Setup: Deposit funds and generate some fees
+        uint256 depositAmount = 100 ether;
+        uint256 yieldAmount = 10 ether; // 10% yield
+
+        // Deposit funds
+        vm.startPrank(user);
+        IERC20(WETH).approve(address(liquidMode), depositAmount);
+        liquidMode.deposit(depositAmount, user);
+        vm.stopPrank();
+
+        // Simulate yield generation
+        deal(liquidMode.EZETH(), address(liquidMode), yieldAmount / 2);
+        deal(liquidMode.WRSETH(), address(liquidMode), yieldAmount / 2);
+
+        // Harvest and reinvest to generate strategist fees
+        vm.prank(liquidMode.owner());
+        liquidMode.harvestReinvestAndReport();
+
+        // Record initial state
+        uint256 initialStrategistBalance = IERC20(WETH).balanceOf(liquidMode.strategist());
+        uint256 initialAccumulatedFees = liquidMode.accumulatedStrategistFee();
+
+        console.log("Initial strategist balance:", initialStrategistBalance);
+        console.log("Initial accumulated fees:", initialAccumulatedFees);
+
+        // Attempt to claim half of the accumulated fees
+        uint256 claimAmount = initialAccumulatedFees / 2;
+        vm.prank(liquidMode.strategist());
+        liquidMode.claimStrategistFees(claimAmount);
+
+        // Check final state
+        uint256 finalStrategistBalance = IERC20(WETH).balanceOf(liquidMode.strategist());
+        uint256 finalAccumulatedFees = liquidMode.accumulatedStrategistFee();
+
+        // Assertions
+        assertEq(
+            finalStrategistBalance,
+            initialStrategistBalance + claimAmount,
+            "Strategist balance should increase by claimed amount"
+        );
+        assertEq(
+            finalAccumulatedFees,
+            initialAccumulatedFees - claimAmount,
+            "Accumulated fees should decrease by claimed amount"
+        );
+
+        // Log final state
+        console.log("Final strategist balance:", finalStrategistBalance);
+        console.log("Final accumulated fees:", finalAccumulatedFees);
+
+        // Test claiming more than available
+        vm.expectRevert("Insufficient fees to claim");
+        vm.prank(liquidMode.strategist());
+        liquidMode.claimStrategistFees(finalAccumulatedFees + 1 ether);
+
+        // Test claiming by non-strategist
+        vm.expectRevert("Only strategist can claim fees");
+        vm.prank(user);
+        liquidMode.claimStrategistFees(1 ether);
     }
 }
