@@ -52,6 +52,7 @@ contract LiquidMode is
     uint128 public kimLiquidity;
 
     bytes32 public constant HARVESTER_ROLE = keccak256("HARVESTER_ROLE");
+    bytes32 public constant STRATEGIST_ROLE = keccak256("STRATEGIST_ROLE");
 
     address public strategist;
     uint256 public accumulatedStrategistFee;
@@ -115,7 +116,7 @@ contract LiquidMode is
     {
         _grantRole(DEFAULT_ADMIN_ROLE, initialOwner);
         _grantRole(HARVESTER_ROLE, initialOwner);
-
+        _grantRole(STRATEGIST_ROLE, _strategist);
         strategist = _strategist;
         nonfungiblePositionManager = _nonfungiblePositionManager;
         EZETH = _EZETH;
@@ -515,14 +516,18 @@ contract LiquidMode is
         amountOutForLowerToken = _swapForToken(amountToSwapInToken, tokenIn, tokenOut);
     }
 
-    function claimStrategistFees(uint256 amount) external nonReentrant {
-        require(msg.sender == strategist, "Only strategist can claim fees");
+    function claimStrategistFees(uint256 amount) external nonReentrant onlyRole(STRATEGIST_ROLE) {
+        console.log("accumulatedStrategistFee", accumulatedStrategistFee);
+        console.log("amount", amount);
         require(amount <= accumulatedStrategistFee, "Insufficient fees to claim");
 
         accumulatedStrategistFee -= amount;
-        _withdrawFunds(amount);
-        SafeERC20.safeTransfer(IERC20(asset()), strategist, amount);
-        emit StrategistFeeClaimed(amount, accumulatedStrategistFee);
+        uint256 wethWithdrawn = _withdrawFunds(amount);
+        uint256 finalWethBalance = WETH.balanceOf(address(this));
+        console.log("finalWethBalance", finalWethBalance);
+        console.log("amount", amount);
+        SafeERC20.safeTransfer(IERC20(asset()), strategist, wethWithdrawn);
+        emit StrategistFeeClaimed(wethWithdrawn, accumulatedStrategistFee);
     }
 
     function totalAssets() public view override returns (uint256) {
