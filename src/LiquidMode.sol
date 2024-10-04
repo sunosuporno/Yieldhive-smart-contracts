@@ -369,23 +369,6 @@ contract LiquidMode is
         amountOut = swapRouter.exactInputSingle(params);
     }
 
-    function _swapBeforeReinvest(uint256 amountIn, bytes memory path, uint256 amountInInTokenOut, address tokenIn)
-        internal
-        returns (uint256 amountOut)
-    {
-        TransferHelper.safeApprove(tokenIn, address(swapRouter), amountIn);
-
-        ISwapRouter.ExactInputParams memory params = ISwapRouter.ExactInputParams({
-            path: path,
-            recipient: address(this),
-            deadline: block.timestamp,
-            amountIn: amountIn,
-            amountOutMinimum: (amountInInTokenOut * (10000 - swapSlippageTolerance)) / 10000
-        });
-        console.log("amountOutMinimum", (amountInInTokenOut * (10000 - swapSlippageTolerance)) / 10000);
-        amountOut = swapRouter.exactInput(params);
-    }
-
     function harvestReinvestAndReport() external nonReentrant onlyRole(HARVESTER_ROLE) {
         (uint256 amount0, uint256 amount1) = _collectKIMFees(0, 0);
         uint256 initialBalanceEzETH = IERC20(EZETH).balanceOf(address(this));
