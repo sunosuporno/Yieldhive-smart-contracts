@@ -303,9 +303,6 @@ contract LiquidMode is
 
 
         (uint256 receivedAmount0, uint256 receivedAmount1) = _collectKIMFees(removedAmount0, removedAmount1);
-
-        uint256 balEzEth = IERC20(EZETH).balanceOf(address(this));
-        uint256 balWrsEth = IERC20(WRSETH).balanceOf(address(this));
         //swap ezETH for ETH
         uint256 wethForEZETH = _swapForToken(receivedAmount0, EZETH, address(WETH));
         uint256 wethForWRSETH = _swapForToken(receivedAmount1, WRSETH, address(WETH));
@@ -325,8 +322,6 @@ contract LiquidMode is
             uint256 expectedAmountOut = ((amountIn * 1e18) / tokenOutPrice) / 1e18;
             amountOutMinimum = (expectedAmountOut * (10000 - swapSlippageTolerance)) / 10000;
         } else if (tokenOut == address(WETH)) {
-            // Original logic for non-WETH input tokens
-            uint256 balanceEzETH = IERC20(EZETH).balanceOf(address(this));
             (int224 _tokenInPrice,) = readDataFeed(tokenIn == EZETH ? ezEthEthProxy : wrsEthEthProxy);
             uint256 tokenInPrice = uint256(uint224(_tokenInPrice));
             uint256 expectedAmountOut = (amountIn * tokenInPrice) / 1e18;
@@ -342,7 +337,6 @@ contract LiquidMode is
             uint256 expectedAmountOut = (amountInInETH * 1e18) / tokenOutPrice;
             amountOutMinimum = (expectedAmountOut * (10000 - swapSlippageTolerance)) / 10000;
         }
-        uint256 ezEThbalance = IERC20(EZETH).balanceOf(address(this));
         ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
             tokenIn: tokenIn,
             tokenOut: tokenOut,
@@ -358,8 +352,6 @@ contract LiquidMode is
 
     function harvestReinvestAndReport() external nonReentrant onlyRole(HARVESTER_ROLE) {
         (uint256 amount0, uint256 amount1) = _collectKIMFees(0, 0);
-        uint256 initialBalanceEzETH = IERC20(EZETH).balanceOf(address(this));
-        uint256 initialBalanceWrsETH = IERC20(WRSETH).balanceOf(address(this));
         if (amount0 > 0 || amount1 > 0) {
             //convert the amount of ezETH and wrsETH to ETH
             (int224 _ezETHPrice,) = readDataFeed(ezEthEthProxy);
@@ -374,12 +366,12 @@ contract LiquidMode is
 
             if (amount0InETH > amount1InETH) {
                 (uint256 amountToSwapInToken, uint256 amountOutForLowerToken) =
-                    _balanceAssets(amount0InETH, amount1InETH, ezETHPrice, wrsETHPrice, EZETH, WRSETH);
+                    _balanceAssets(amount0InETH, amount1InETH, ezETHPrice, EZETH, WRSETH);
                 ezETHToReinvest = amount0 - amountToSwapInToken;
                 wrsETHToReinvest = amount1 + amountOutForLowerToken;
             } else if (amount1InETH > amount0InETH) {
                 (uint256 amountToSwapInToken, uint256 amountOutForLowerToken) =
-                    _balanceAssets(amount1InETH, amount0InETH, wrsETHPrice, ezETHPrice, WRSETH, EZETH);
+                    _balanceAssets(amount1InETH, amount0InETH, wrsETHPrice, WRSETH, EZETH);
                 ezETHToReinvest = amount0 + amountOutForLowerToken;
                 wrsETHToReinvest = amount1 - amountToSwapInToken;
             }
@@ -395,8 +387,6 @@ contract LiquidMode is
             uint256 performanceFee = (totalProfit * strategistFeePercentage) / 10000;
             accumulatedStrategistFee += performanceFee;
             _totalAccountedAssets += totalProfit - performanceFee;
-            uint256 balanceEzETH = IERC20(EZETH).balanceOf(address(this));
-            uint256 balanceWrsETH = IERC20(WRSETH).balanceOf(address(this));
 
             (uint128 reinvestedLiquidity, , ) = _addLiquidityToKIMPosition(ezETHToReinvest, wrsETHToReinvest);
 
@@ -444,9 +434,9 @@ contract LiquidMode is
 
         // Balance assets if necessary
         if (wrsETHValueInETH > ezETHValueInETH) {
-            _balanceAssets(wrsETHValueInETH, ezETHValueInETH, wrsETHPrice, ezETHPrice, WRSETH, EZETH);
+            _balanceAssets(wrsETHValueInETH, ezETHValueInETH, wrsETHPrice, WRSETH, EZETH);
         } else if (ezETHValueInETH > wrsETHValueInETH) {
-            _balanceAssets(ezETHValueInETH, wrsETHValueInETH, ezETHPrice, wrsETHPrice, EZETH, WRSETH);
+            _balanceAssets(ezETHValueInETH, wrsETHValueInETH, ezETHPrice, EZETH, WRSETH);
         }
 
         // Add liquidity to KIM position
@@ -463,16 +453,12 @@ contract LiquidMode is
         uint256 higherAmount,
         uint256 lowerAmount,
         uint256 higherPrice,
-        uint256 lowerPrice,
         address tokenIn,
         address tokenOut
     ) internal returns (uint256 amountToSwapInToken, uint256 amountOutForLowerToken) {
         uint256 difference = higherAmount - lowerAmount;
         uint256 amountToSwapInETH = difference / 2;
         amountToSwapInToken = amountToSwapInETH * 10 ** 18 / higherPrice;
-        uint256 sameAmountInOtherToken = amountToSwapInETH * 10 ** 18 / lowerPrice;
-        bytes memory path = abi.encodePacked(tokenIn, WETH, tokenOut);
-        // amountOutForLowerToken = _swapBeforeReinvest(amountToSwapInToken, path, sameAmountInOtherToken, tokenIn);
         amountOutForLowerToken = _swapForToken(amountToSwapInToken, tokenIn, tokenOut);
     }
 
@@ -481,7 +467,6 @@ contract LiquidMode is
 
         accumulatedStrategistFee -= amount;
         uint256 wethWithdrawn = _withdrawFunds(amount);
-        uint256 finalWethBalance = WETH.balanceOf(address(this));
         SafeERC20.safeTransfer(IERC20(asset()), strategist, wethWithdrawn);
         emit StrategistFeeClaimed(wethWithdrawn, accumulatedStrategistFee);
     }
