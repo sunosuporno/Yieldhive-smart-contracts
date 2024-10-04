@@ -1689,5 +1689,115 @@ contract LiquidModeTest is Test {
         console.log("Final accumulated fees:", finalAccumulatedFees);
     }
 
+    function testNonHarvesterCannotHarvest() public {
+        uint256 depositAmount = 100 ether;
+        uint256 feeAmount0 = 1 ether; // 1 ezETH in fees
+        uint256 feeAmount1 = 1.5 ether; // 1.5 wrsETH in fees
+
+        (int224 _ezETHPrice,) = liquidMode.readDataFeed(EZETH_ETH_PROXY);
+        uint256 ezETHPrice = uint256(uint224(_ezETHPrice));
+        (int224 _wrsETHPrice,) = liquidMode.readDataFeed(WRSETH_ETH_PROXY);
+        uint256 wrsETHPrice = uint256(uint224(_wrsETHPrice));
+
+        //convert to ETH
+        uint256 feeAmount0InETH = (1.25 ether * ezETHPrice) / 10 ** 18;
+        uint256 feeAmount1InETH = (1.25 ether * wrsETHPrice) / 10 ** 18;
+
+        // Setup initial deposit
+        vm.startPrank(user);
+        IERC20(WETH).approve(address(liquidMode), depositAmount);
+        liquidMode.deposit(depositAmount, user);
+        vm.stopPrank();
+
+        assertEq(liquidMode.totalAssets(), depositAmount, "Initial deposit should match total assets");
+
+        // Mock the collect function
+        vm.mockCall(
+            address(liquidMode.ezETHwrsETHPool()),
+            abi.encodeWithSelector(IAlgebraPoolActions.collect.selector),
+            abi.encode(feeAmount0, feeAmount1)
+        );
+
+        // Transfer the mocked fee amounts to the LiquidMode contract
+        deal(liquidMode.EZETH(), address(liquidMode), feeAmount0);
+        deal(liquidMode.WRSETH(), address(liquidMode), feeAmount1);
+
+        // Create a non-harvester address
+        address nonHarvester = address(0x1234);
+        vm.startPrank(nonHarvester);
+
+        // Attempt to call harvestReinvestAndReport as non-harvester
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, nonHarvester, liquidMode.HARVESTER_ROLE()));
+        liquidMode.harvestReinvestAndReport();
+
+        // Stop pranking
+        vm.stopPrank();
+
+        // Verify that the state hasn't changed
+        assertEq(liquidMode.totalAssets(), depositAmount, "Total assets should not change");
+        assertEq(liquidMode.accumulatedStrategistFee(), 0, "Accumulated strategist fee should remain zero");
+
+        console.log("Total assets after failed harvest:", liquidMode.totalAssets());
+        console.log("Accumulated strategist fee after failed harvest:", liquidMode.accumulatedStrategistFee());
+    }
+
+    function testNonHarvesterCannotPerformMaintenance() public {
+        // Setup: Deposit some funds
+        uint256 depositAmount = 10 ether;
+
+        // Deposit funds
+        vm.startPrank(user);
+        IERC20(WETH).approve(address(liquidMode), depositAmount);
+        liquidMode.deposit(depositAmount, user);
+        vm.stopPrank();
+
+        // Simulate some time passing and operations occurring
+        vm.roll(block.number + 1000);
+
+        // Record initial balances
+        uint256 initialWETHBalance = IERC20(WETH).balanceOf(address(liquidMode));
+        uint256 initialEzETHBalance = IERC20(liquidMode.EZETH()).balanceOf(address(liquidMode));
+        uint256 initialWrsETHBalance = IERC20(liquidMode.WRSETH()).balanceOf(address(liquidMode));
+        (, uint128 initialLiquidity,,) = liquidMode.getKimPosition();
+
+        console.log("Initial WETH balance:", initialWETHBalance);
+        console.log("Initial ezETH balance:", initialEzETHBalance);
+        console.log("Initial wrsETH balance:", initialWrsETHBalance);
+        console.log("Initial liquidity:", initialLiquidity);
+
+        // Record initial total assets
+        uint256 initialTotalAssets = liquidMode.totalAssets();
+
+        // Create a non-harvester address
+        address nonHarvester = address(0x1234);
+
+        // Attempt to perform maintenance as non-harvester
+        vm.startPrank(nonHarvester);
+        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, nonHarvester, liquidMode.HARVESTER_ROLE()));
+        liquidMode.performMaintenance();
+        vm.stopPrank();
+
+        // Check final balances and total assets
+        uint256 finalWETHBalance = IERC20(WETH).balanceOf(address(liquidMode));
+        uint256 finalEzETHBalance = IERC20(liquidMode.EZETH()).balanceOf(address(liquidMode));
+        uint256 finalWrsETHBalance = IERC20(liquidMode.WRSETH()).balanceOf(address(liquidMode));
+        uint256 finalTotalAssets = liquidMode.totalAssets();
+        (, uint128 finalLiquidity,,) = liquidMode.getKimPosition();
+
+        // Assert that nothing has changed
+        assertEq(finalWETHBalance, initialWETHBalance, "WETH balance should not change");
+        assertEq(finalEzETHBalance, initialEzETHBalance, "ezETH balance should not change");
+        assertEq(finalWrsETHBalance, initialWrsETHBalance, "wrsETH balance should not change");
+        assertEq(finalTotalAssets, initialTotalAssets, "Total assets should not change");
+        assertEq(finalLiquidity, initialLiquidity, "Liquidity should not change");
+
+        // Log results
+        console.log("Final WETH balance:", finalWETHBalance);
+        console.log("Final ezETH balance:", finalEzETHBalance);
+        console.log("Final wrsETH balance:", finalWrsETHBalance);
+        console.log("Final total assets:", finalTotalAssets);
+        console.log("Final liquidity:", finalLiquidity);
+    }
+    
     
 }
