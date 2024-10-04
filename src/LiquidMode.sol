@@ -580,7 +580,7 @@ contract LiquidMode is
         _burn(owner, shares);
 
         uint256 wethWithdrawn = _withdrawFunds(assets);
-        _totalAccountedAssets -= wethWithdrawn;
+        _totalAccountedAssets -= assets;
         SafeERC20.safeTransfer(IERC20(asset()), receiver, wethWithdrawn);
 
         emit Withdraw(caller, receiver, owner, wethWithdrawn, shares);

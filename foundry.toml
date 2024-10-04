@@ -12,5 +12,6 @@ via_ir = true
 sepolia = "${SEPOLIA_RPC_URL}"
 tenderly = "${TENDERLY_VIRTUAL_TESTNET_RPC}"
 tenderly_optimism = "${TENDERLY_VIRTUAL_TESTNET_RPC_OPTIMISM}"
+mode ="${TENDERLY_MODE_RPC}"
 
 

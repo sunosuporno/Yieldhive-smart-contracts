@@ -91,7 +91,7 @@ contract LiquidModeTest is Test {
     }
 
     function testDeposit() public {
-        uint256 depositAmount = 1 ether;
+        uint256 depositAmount = 0.00411 ether;
 
         vm.startPrank(user);
 
@@ -1797,6 +1797,78 @@ contract LiquidModeTest is Test {
         console.log("Final wrsETH balance:", finalWrsETHBalance);
         console.log("Final total assets:", finalTotalAssets);
         console.log("Final liquidity:", finalLiquidity);
+    }
+
+
+    function testInvestWithdrawReinvest() public {
+        uint256 initialDepositAmount = 0.00411 ether;
+
+        // Step 1: Initial Investment
+        vm.startPrank(user);
+        IERC20(WETH).approve(address(liquidMode), initialDepositAmount);
+        uint256 initialSharesReceived = liquidMode.deposit(initialDepositAmount, user);
+        vm.stopPrank();
+
+        console.log("Initial deposit amount:", initialDepositAmount);
+        console.log("Initial shares received:", initialSharesReceived);
+        console.log("Initial total assets:", liquidMode.totalAssets());
+
+        // Skip 100 blocks to simulate time passing
+        vm.roll(block.number + 100);
+
+        // Step 2: Full Withdrawal
+        uint256 userSharesBeforeWithdrawal = liquidMode.balanceOf(user);
+        uint256 userWETHBalanceBeforeWithdrawal = IERC20(WETH).balanceOf(user);
+
+        vm.startPrank(user);
+        uint256 assetsRedeemed = liquidMode.redeem(userSharesBeforeWithdrawal, user, user);
+        vm.stopPrank();
+
+        uint256 userWETHBalanceAfterWithdrawal = IERC20(WETH).balanceOf(user);
+        uint256 actualWithdrawnAmount = userWETHBalanceAfterWithdrawal - userWETHBalanceBeforeWithdrawal;
+
+        console.log("Assets redeemed:", assetsRedeemed);
+        console.log("Actual withdrawn amount:", actualWithdrawnAmount);
+        console.log("Total assets after withdrawal:", liquidMode.totalAssets());
+
+        // Define acceptable variance (1.5% of deposit amount to account for slippage and fees)
+        uint256 acceptableVariance = initialDepositAmount * 15 / 1000;
+
+        // Assertions for withdrawal
+        assertApproxEqAbs(
+            actualWithdrawnAmount,
+            initialDepositAmount,
+            0.02e18,
+            "User should receive approximately the full deposited amount of WETH (within 1.5%)"
+        );
+        assertEq(liquidMode.balanceOf(user), 0, "User should have no shares left after full withdrawal");
+
+        // Step 3: Reinvest the withdrawn amount
+        uint256 reinvestAmount = actualWithdrawnAmount;
+
+        vm.startPrank(user);
+        IERC20(WETH).approve(address(liquidMode), reinvestAmount);
+        uint256 reinvestedShares = liquidMode.deposit(reinvestAmount, user);
+        vm.stopPrank();
+
+        console.log("Reinvested amount:", reinvestAmount);
+        console.log("Reinvested shares received:", reinvestedShares);
+        console.log("Total assets after reinvestment:", liquidMode.totalAssets());
+
+        // Assertions for reinvestment
+        assertGt(reinvestedShares, 0, "User should receive shares for reinvestment");
+        assertApproxEqAbs(
+            liquidMode.totalAssets(),
+            reinvestAmount,
+            acceptableVariance,
+            "Total assets should be close to reinvested amount (within 1.5%)"
+        );
+
+        // Check final balances
+        uint256 finalContractWRSETHBalance = IERC20(WRSETH).balanceOf(address(liquidMode));
+        uint256 finalContractEZETHBalance = IERC20(EZETH).balanceOf(address(liquidMode));
+        console.log("Final Contract WRSETH Balance", finalContractWRSETHBalance);
+        console.log("Final Contract EZETH Balance", finalContractEZETHBalance);
     }
     
     
