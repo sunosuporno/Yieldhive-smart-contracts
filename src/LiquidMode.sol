@@ -37,38 +37,40 @@ contract LiquidMode is
     IERC721Receiver,
     LiquidityManagement
 {
-    using Math for uint256;
-    using SafeERC20 for IERC20;
-    using EnumerableSet for EnumerableSet.AddressSet;
+    // Constants
+    bytes32 public constant HARVESTER_ROLE = keccak256("HARVESTER_ROLE");
+    bytes32 public constant STRATEGIST_ROLE = keccak256("STRATEGIST_ROLE");
+    uint256 public constant MAX_STRATEGIST_FEE_PERCENTAGE = 3000; // 30% maximum
+    uint256 public constant MAX_MANAGEMENT_FEE_PERCENTAGE = 500; // 5% maximum
+    uint256 public constant MANAGEMENT_FEE_INTERVAL = 365 days;
+    int24 public constant BOTTOM_TICK = -3360;
+    int24 public constant TOP_TICK = 3360;
 
+    // Immutable variables
+    IWETH9 public immutable WETH;
     ISwapRouter public immutable swapRouter;
-
     INonfungiblePositionManager public immutable nonfungiblePositionManager;
     address public immutable EZETH;
     address public immutable WRSETH;
 
+    // Storage variables (try to group similar types together)
     uint256 public kimTokenId;
     uint128 public kimLiquidity;
-
-    bytes32 public constant HARVESTER_ROLE = keccak256("HARVESTER_ROLE");
-    bytes32 public constant STRATEGIST_ROLE = keccak256("STRATEGIST_ROLE");
-
-    address public strategist;
-    uint256 public accumulatedStrategistFee;
-    uint256 public lastManagementFeeCollection;
-
     uint256 public totalDeposits;
     uint256 public _totalAccountedAssets;
+    uint256 public accumulatedStrategistFee;
+    uint256 public lastManagementFeeCollection;
+    uint256 public liquiditySlippageTolerance = 500; // 5% default for liquidity operations
+    uint256 public swapSlippageTolerance = 200; // 2% default for swaps
+    uint256 public strategistFeePercentage = 2000; // 20% with 2 decimal places
+
+    address public strategist;
     address public ezETHwrsETHPool;
     address public ezEthEthProxy;
     address public wrsEthEthProxy;
     address public treasury;
 
-    event StrategistFeeClaimed(uint256 claimedAmount, uint256 remainingFees);
-    event AnnualManagementFeeCollected(uint256 feeAmount);
-    event StrategistFeePercentageUpdated(uint256 newPercentage);
-    event ManagementFeePercentageUpdated(uint256 newPercentage);
-
+    // Struct definition
     struct KIMPosition {
         uint256 tokenId;
         uint128 liquidity;
@@ -76,19 +78,33 @@ contract LiquidMode is
         uint256 amount1;
     }
 
+    // Complex types
     KIMPosition public kimPosition;
 
-    IWETH9 public immutable WETH;
+    // Events
+    event StrategistFeeClaimed(uint256 claimedAmount, uint256 remainingFees);
+    event StrategistFeePercentageUpdated(uint256 newPercentage);
+    event HarvestReinvestReport(
+        uint256 collectedEzETH,
+        uint256 collectedWrsETH,
+        uint256 ezETHToReinvest,
+        uint256 wrsETHToReinvest,
+        uint256 totalProfitInETH,
+        uint256 performanceFee,
+        uint128 reinvestedLiquidity
+    );
+    event MaintenancePerformed(
+        uint256 initialWETHBalance,
+        uint256 finalEzETHBalance,
+        uint256 finalWrsETHBalance,
+        uint128 addedLiquidity
+    );
 
-    uint256 public liquiditySlippageTolerance = 500; // 5% default for liquidity operations
-    uint256 public swapSlippageTolerance = 200; // 2% default for swaps
-    uint256 public strategistFeePercentage = 2000; // 20% with 2 decimal places
-    uint256 public managementFeePercentage = 100; // 1% annual fee with 2 decimal places
-    uint256 public constant MAX_STRATEGIST_FEE_PERCENTAGE = 3000; // 30% maximum
-    uint256 public constant MAX_MANAGEMENT_FEE_PERCENTAGE = 500; // 5% maximum
-    uint256 public constant MANAGEMENT_FEE_INTERVAL = 365 days;
-    int24 public constant BOTTOM_TICK = -3360;
-    int24 public constant TOP_TICK = 3360;
+    // Library usage
+    using Math for uint256;
+    using SafeERC20 for IERC20;
+    using EnumerableSet for EnumerableSet.AddressSet;
+
 
     constructor(
         IERC20 asset_,
@@ -382,7 +398,17 @@ contract LiquidMode is
             uint256 balanceEzETH = IERC20(EZETH).balanceOf(address(this));
             uint256 balanceWrsETH = IERC20(WRSETH).balanceOf(address(this));
 
-            _addLiquidityToKIMPosition(ezETHToReinvest, wrsETHToReinvest);
+            (uint128 reinvestedLiquidity, , ) = _addLiquidityToKIMPosition(ezETHToReinvest, wrsETHToReinvest);
+
+            emit HarvestReinvestReport(
+                amount0,
+                amount1,
+                ezETHToReinvest,
+                wrsETHToReinvest,
+                totalProfit,
+                performanceFee,
+                reinvestedLiquidity
+            );
         }
     }
 
@@ -426,9 +452,11 @@ contract LiquidMode is
         // Add liquidity to KIM position
         uint256 finalWrsETHBalance = IERC20(WRSETH).balanceOf(address(this));
         uint256 finalEzETHBalance = IERC20(EZETH).balanceOf(address(this));
+        uint128 reinvestedLiquidity;
         if (finalWrsETHBalance > 0 && finalEzETHBalance > 0) {
-            _addLiquidityToKIMPosition(finalEzETHBalance, finalWrsETHBalance);
+             (reinvestedLiquidity, , ) = _addLiquidityToKIMPosition(finalEzETHBalance, finalWrsETHBalance);
         }
+        emit MaintenancePerformed(wethBalance, finalEzETHBalance, finalWrsETHBalance, reinvestedLiquidity);
     }
 
     function _balanceAssets(
@@ -502,11 +530,6 @@ contract LiquidMode is
         emit StrategistFeePercentageUpdated(_newPercentage);
     }
 
-    function setManagementFeePercentage(uint256 _newPercentage) external onlyOwner {
-        require(_newPercentage <= MAX_MANAGEMENT_FEE_PERCENTAGE, "Fee exceeds maximum allowed");
-        managementFeePercentage = _newPercentage;
-        emit ManagementFeePercentageUpdated(_newPercentage);
-    }
 
     function deposit(uint256 assets, address receiver)
         public
@@ -593,19 +616,6 @@ contract LiquidMode is
         // _createDeposit(operator, tokenId);
 
         return this.onERC721Received.selector;
-    }
-
-    function collectAnnualManagementFee() external {
-        require(msg.sender == strategist, "Only strategist can collect fees");
-        require(block.timestamp >= lastManagementFeeCollection + MANAGEMENT_FEE_INTERVAL, "Fee collection not yet due");
-
-        // Calculate annual management fee
-        uint256 annualManagementFee = (totalAssets() * managementFeePercentage) / 10000;
-
-        accumulatedStrategistFee += annualManagementFee;
-        _totalAccountedAssets -= annualManagementFee;
-
-        emit AnnualManagementFeeCollected(annualManagementFee);
     }
 
     function getKimPosition() public view returns (uint256, uint128, uint256, uint256) {
