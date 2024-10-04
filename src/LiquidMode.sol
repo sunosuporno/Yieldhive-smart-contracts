@@ -62,7 +62,7 @@ contract LiquidMode is
     uint256 public lastManagementFeeCollection;
     uint256 public liquiditySlippageTolerance = 500; // 5% default for liquidity operations
     uint256 public swapSlippageTolerance = 200; // 2% default for swaps
-    uint256 public strategistFeePercentage = 2000; // 20% with 2 decimal places
+    uint256 public strategistFeePercentage = 500; // 5% with 2 decimal places
 
     address public strategist;
     address public ezETHwrsETHPool;

@@ -1150,7 +1150,7 @@ contract LiquidModeTest is Test {
         uint256 actualIncrease = newTotalAssets - initialTotalAssets;
 
         // Calculate the expected increase, accounting for strategist fee
-        uint256 expectedIncrease = (yieldAmountInETH * 80) / 100; // 80% of yield (20% goes to strategist)
+        uint256 expectedIncrease = (yieldAmountInETH * 95) / 100; // 95% of yield (5% goes to strategist)
         assertApproxEqRel(
             actualIncrease, expectedIncrease, 0.02e18, "Actual increase should be close to expected increase"
         );
@@ -1257,7 +1257,7 @@ contract LiquidModeTest is Test {
         // Assertions
         uint256 expectedMinIncrease = feeAmount0InETH + feeAmount1InETH; // 2% slippage tolerance
         console.log("expectedMinIncrease", expectedMinIncrease);
-        uint256 strategistFee = expectedMinIncrease * 20 / 100;
+        uint256 strategistFee = expectedMinIncrease * 5 / 100;
         console.log("strategistFee", strategistFee);
         uint256 netIncrease = expectedMinIncrease - strategistFee;
         console.log("netIncrease", netIncrease);
@@ -1311,7 +1311,7 @@ contract LiquidModeTest is Test {
         // Assertions
         uint256 expectedMinIncrease = feeAmount0InETH;
         console.log("expectedMinIncrease", expectedMinIncrease);
-        uint256 strategistFee = expectedMinIncrease * 20 / 100;
+        uint256 strategistFee = expectedMinIncrease * 5 / 100;
         console.log("strategistFee", strategistFee);
         uint256 netIncrease = expectedMinIncrease - strategistFee;
         console.log("netIncrease", netIncrease);
