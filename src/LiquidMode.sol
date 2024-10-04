@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "forge-std/console.sol";
 import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -135,27 +134,18 @@ contract LiquidMode is
 
         // Unwrap WETH to ETH
         // WETH.withdraw(assets);
-        console.log("runnning0");
         _mint(receiver, shares);
-        console.log("runnning1");
         totalDeposits += assets;
         _totalAccountedAssets += assets;
-        console.log("runnning2");
         _investFunds(assets);
-        console.log("runnning3");
         emit Deposit(caller, receiver, assets, shares);
     }
 
     function _investFunds(uint256 amount) internal {
         // uint256 receivedEzETH = xRenzoDeposit.depositETH{value: amount / 2}(0, block.timestamp);
         // rSETHPoolV2.deposit{value: amount / 2}("");
-        console.log("runnning2-1");
         uint256 receivedEzETH = _swapForToken(amount / 2, address(WETH), EZETH);
-        console.log("runnning2-2");
         uint256 receivedWRSETH = _swapForToken(amount / 2, address(WETH), WRSETH);
-        console.log("runnning2-3");
-        console.log("receivedEzETH", receivedEzETH);
-        console.log("receivedWRSETH", receivedWRSETH);
         if (kimPosition.tokenId == 0) {
             _createKIMPosition(receivedEzETH, receivedWRSETH);
         } else {
@@ -231,9 +221,6 @@ contract LiquidMode is
         returns (uint256 removedAmount0, uint256 removedAmount1)
     {
         uint128 _liquidity = _getLiquidityForAmounts(amount0, amount1);
-        console.log("liquidity", _liquidity);
-        console.log("amount0", amount0);
-        console.log("amount1", amount1);
         INonfungiblePositionManager.DecreaseLiquidityParams memory params = INonfungiblePositionManager
             .DecreaseLiquidityParams({
             tokenId: kimPosition.tokenId,
@@ -291,37 +278,24 @@ contract LiquidMode is
         uint256 ezETHPrice = uint256(uint224(_ezETHPrice));
         (int224 _wrsETHPrice,) = readDataFeed(wrsEthEthProxy);
         uint256 wrsETHPrice = uint256(uint224(_wrsETHPrice));
-        console.log("ezETHPrice", ezETHPrice);
-        console.log("wrsETHPrice", wrsETHPrice);
 
-        console.log("amount", amount);
         uint256 ezETHAmount = (amount * 1e18) / (ezETHPrice * 2);
         uint256 wrsETHAmount = (amount * 1e18) / (wrsETHPrice * 2);
-        console.log("ezETHAmount", ezETHAmount);
-        console.log("wrsETHAmount", wrsETHAmount);
 
         //take out liquidity from KIM position
         (uint256 removedAmount0, uint256 removedAmount1) = _removeLiquidityFromKIMPosition(ezETHAmount, wrsETHAmount);
 
-        console.log("decreasing liquidity successfull");
 
         (uint256 receivedAmount0, uint256 receivedAmount1) = _collectKIMFees(removedAmount0, removedAmount1);
-        console.log("receivedAmount0", receivedAmount0);
-        console.log("receivedAmount1", receivedAmount1);
 
         uint256 balEzEth = IERC20(EZETH).balanceOf(address(this));
         uint256 balWrsEth = IERC20(WRSETH).balanceOf(address(this));
-        console.log("balEzEth", balEzEth);
-        console.log("balWrsEth", balWrsEth);
         //swap ezETH for ETH
         uint256 wethForEZETH = _swapForToken(receivedAmount0, EZETH, address(WETH));
         uint256 wethForWRSETH = _swapForToken(receivedAmount1, WRSETH, address(WETH));
 
-        console.log("wethForEZETH", wethForEZETH);
-        console.log("wethForWRSETH", wethForWRSETH);
 
         totalWETH = wethForEZETH + wethForWRSETH;
-        console.log("totalWETH", totalWETH);
     }
 
     function _swapForToken(uint256 amountIn, address tokenIn, address tokenOut) internal returns (uint256 amountOut) {
@@ -335,10 +309,8 @@ contract LiquidMode is
             uint256 expectedAmountOut = ((amountIn * 1e18) / tokenOutPrice) / 1e18;
             amountOutMinimum = (expectedAmountOut * (10000 - swapSlippageTolerance)) / 10000;
         } else if (tokenOut == address(WETH)) {
-            console.log("tokenIn", tokenIn);
             // Original logic for non-WETH input tokens
             uint256 balanceEzETH = IERC20(EZETH).balanceOf(address(this));
-            console.log("balanceEzETH", balanceEzETH);
             (int224 _tokenInPrice,) = readDataFeed(tokenIn == EZETH ? ezEthEthProxy : wrsEthEthProxy);
             uint256 tokenInPrice = uint256(uint224(_tokenInPrice));
             uint256 expectedAmountOut = (amountIn * tokenInPrice) / 1e18;
@@ -355,7 +327,6 @@ contract LiquidMode is
             amountOutMinimum = (expectedAmountOut * (10000 - swapSlippageTolerance)) / 10000;
         }
         uint256 ezEThbalance = IERC20(EZETH).balanceOf(address(this));
-        console.log(ezEThbalance);
         ISwapRouter.ExactInputSingleParams memory params = ISwapRouter.ExactInputSingleParams({
             tokenIn: tokenIn,
             tokenOut: tokenOut,
@@ -373,10 +344,6 @@ contract LiquidMode is
         (uint256 amount0, uint256 amount1) = _collectKIMFees(0, 0);
         uint256 initialBalanceEzETH = IERC20(EZETH).balanceOf(address(this));
         uint256 initialBalanceWrsETH = IERC20(WRSETH).balanceOf(address(this));
-        console.log("initialBalanceEzETH", initialBalanceEzETH);
-        console.log("initialBalanceWrsETH", initialBalanceWrsETH);
-        console.log("amount0", amount0);
-        console.log("amount1", amount1);
         if (amount0 > 0 || amount1 > 0) {
             //convert the amount of ezETH and wrsETH to ETH
             (int224 _ezETHPrice,) = readDataFeed(ezEthEthProxy);
@@ -386,8 +353,6 @@ contract LiquidMode is
 
             uint256 amount0InETH = amount0 > 0 ? (amount0 * ezETHPrice) / 10 ** 18 : 0;
             uint256 amount1InETH = amount1 > 0 ? (amount1 * wrsETHPrice) / 10 ** 18 : 0;
-            console.log("amount0InETH", amount0InETH);
-            console.log("amount1InETH", amount1InETH);
             uint256 ezETHToReinvest;
             uint256 wrsETHToReinvest;
 
@@ -399,12 +364,8 @@ contract LiquidMode is
             } else if (amount1InETH > amount0InETH) {
                 (uint256 amountToSwapInToken, uint256 amountOutForLowerToken) =
                     _balanceAssets(amount1InETH, amount0InETH, wrsETHPrice, ezETHPrice, WRSETH, EZETH);
-                console.log("amountToSwapInToken", amountToSwapInToken);
-                console.log("amountOutForLowerToken", amountOutForLowerToken);
                 ezETHToReinvest = amount0 + amountOutForLowerToken;
-                console.log("ezETHToReinvest", ezETHToReinvest);
                 wrsETHToReinvest = amount1 - amountToSwapInToken;
-                console.log("wrsETHToReinvest", wrsETHToReinvest);
             }
 
             // uint256 currentEzETHBalance = IERC20(EZETH).balanceOf(address(this));
@@ -413,21 +374,13 @@ contract LiquidMode is
             // Calculate and accrue performance fee
             uint256 ezETHToReinvestInETH = ezETHToReinvest * ezETHPrice / 10 ** 18;
             uint256 wrsETHToReinvestInETH = wrsETHToReinvest * wrsETHPrice / 10 ** 18;
-            console.log("ezETHToReinvestInETH", ezETHToReinvestInETH);
-            console.log("wrsETHToReinvestInETH", wrsETHToReinvestInETH);
 
             uint256 totalProfit = ezETHToReinvestInETH + wrsETHToReinvestInETH;
-            console.log("totalProfit", totalProfit);
             uint256 performanceFee = (totalProfit * strategistFeePercentage) / 10000;
-            console.log("performanceFee", performanceFee);
             accumulatedStrategistFee += performanceFee;
-            console.log("accumulatedStrategistFee", accumulatedStrategistFee);
             _totalAccountedAssets += totalProfit - performanceFee;
-            console.log("_totalAccountedAssets", _totalAccountedAssets);
             uint256 balanceEzETH = IERC20(EZETH).balanceOf(address(this));
             uint256 balanceWrsETH = IERC20(WRSETH).balanceOf(address(this));
-            console.log("balanceEzETH", balanceEzETH);
-            console.log("balanceWrsETH", balanceWrsETH);
 
             _addLiquidityToKIMPosition(ezETHToReinvest, wrsETHToReinvest);
         }
@@ -487,28 +440,20 @@ contract LiquidMode is
         address tokenOut
     ) internal returns (uint256 amountToSwapInToken, uint256 amountOutForLowerToken) {
         uint256 difference = higherAmount - lowerAmount;
-        console.log("difference", difference);
         uint256 amountToSwapInETH = difference / 2;
-        console.log("amountToSwapInETH", amountToSwapInETH);
         amountToSwapInToken = amountToSwapInETH * 10 ** 18 / higherPrice;
-        console.log("amountToSwapInToken", amountToSwapInToken);
         uint256 sameAmountInOtherToken = amountToSwapInETH * 10 ** 18 / lowerPrice;
-        console.log("sameAmountInOtherToken", sameAmountInOtherToken);
         bytes memory path = abi.encodePacked(tokenIn, WETH, tokenOut);
         // amountOutForLowerToken = _swapBeforeReinvest(amountToSwapInToken, path, sameAmountInOtherToken, tokenIn);
         amountOutForLowerToken = _swapForToken(amountToSwapInToken, tokenIn, tokenOut);
     }
 
     function claimStrategistFees(uint256 amount) external nonReentrant onlyRole(STRATEGIST_ROLE) {
-        console.log("accumulatedStrategistFee", accumulatedStrategistFee);
-        console.log("amount", amount);
         require(amount <= accumulatedStrategistFee, "Insufficient fees to claim");
 
         accumulatedStrategistFee -= amount;
         uint256 wethWithdrawn = _withdrawFunds(amount);
         uint256 finalWethBalance = WETH.balanceOf(address(this));
-        console.log("finalWethBalance", finalWethBalance);
-        console.log("amount", amount);
         SafeERC20.safeTransfer(IERC20(asset()), strategist, wethWithdrawn);
         emit StrategistFeeClaimed(wethWithdrawn, accumulatedStrategistFee);
     }
