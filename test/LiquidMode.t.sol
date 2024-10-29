@@ -24,11 +24,11 @@ contract LiquidModeTest is Test {
     address constant NONFUNGIBLE_POSITION_MANAGER = 0x2e8614625226D26180aDf6530C3b1677d3D7cf10;
     address constant FACTORY = 0xB5F00c2C5f8821155D8ed27E31932CFD9DB3C5D5;
     address constant POOL_DEPLOYER = 0x6414A461B19726410E52488d9D5ff33682701635;
-    address constant EZETH = 0x2416092f143378750bb29b79eD961ab195CcEea5;
-    address constant WRSETH = 0xe7903B1F75C534Dd8159b313d92cDCfbC62cB3Cd;
     address constant EZETH_WRSETH_POOL = 0xCC29E407a272F2CC817DB9fBfF7e6FdA6536Fc0e;
     address constant SWAP_ROUTER = 0xAc48FcF1049668B285f3dC72483DF5Ae2162f7e8;
     address constant TREASURY = 0x273dFa01f5605b8c41d6CE1146ed0911FDC5ad07;
+    address constant EZETH = 0x2416092f143378750bb29b79eD961ab195CcEea5;
+    address constant WRSETH = 0xe7903B1F75C534Dd8159b313d92cDCfbC62cB3Cd;
     address constant EZETH_ETH_PROXY = 0x3621b06BfFE478eB481adf65bbF139A052Ed7321;
     address constant WRSETH_ETH_PROXY = 0xc30e51C9EDD92B9eeF45f281c712faaAf59912BA;
     address public user;
@@ -45,12 +45,12 @@ contract LiquidModeTest is Test {
             INonfungiblePositionManager(NONFUNGIBLE_POSITION_MANAGER),
             FACTORY,
             POOL_DEPLOYER,
-            EZETH,
-            WRSETH,
             WETH,
             EZETH_WRSETH_POOL,
             ISwapRouter(SWAP_ROUTER),
             TREASURY,
+            EZETH,
+            WRSETH,
             EZETH_ETH_PROXY,
             WRSETH_ETH_PROXY
         );
@@ -85,7 +85,7 @@ contract LiquidModeTest is Test {
         assertEq(liquidMode.EZETH(), EZETH, "EZETH should be set correctly");
         assertEq(liquidMode.WRSETH(), WRSETH, "WRSETH should be set correctly");
         assertEq(address(liquidMode.WETH()), WETH, "WETH should be set correctly");
-        assertEq(liquidMode.ezETHwrsETHPool(), EZETH_WRSETH_POOL, "ezETHwrsETHPool should be set correctly");
+        assertEq(liquidMode.poolAddress(), EZETH_WRSETH_POOL, "poolAddress should be set correctly");
         assertEq(address(liquidMode.swapRouter()), SWAP_ROUTER, "SwapRouter should be set correctly");
         assertEq(liquidMode.treasury(), TREASURY, "Treasury should be set correctly");
     }
@@ -1132,7 +1132,7 @@ contract LiquidModeTest is Test {
 
         // Mock the collect function to simulate yield
         vm.mockCall(
-            address(liquidMode.ezETHwrsETHPool()),
+            address(liquidMode.poolAddress()),
             abi.encodeWithSelector(IAlgebraPoolActions.collect.selector),
             abi.encode(yieldAmount / 2, yieldAmount / 2) // Split yield between ezETH and wrsETH
         );
@@ -1239,7 +1239,7 @@ contract LiquidModeTest is Test {
 
         // Mock the collect function
         vm.mockCall(
-            address(liquidMode.ezETHwrsETHPool()),
+            address(liquidMode.poolAddress()),
             abi.encodeWithSelector(IAlgebraPoolActions.collect.selector),
             abi.encode(feeAmount0, feeAmount1)
         );
@@ -1294,7 +1294,7 @@ contract LiquidModeTest is Test {
 
         // Mock the collect function
         vm.mockCall(
-            address(liquidMode.ezETHwrsETHPool()),
+            address(liquidMode.poolAddress()),
             abi.encodeWithSelector(IAlgebraPoolActions.collect.selector),
             abi.encode(feeAmount0, feeAmount1)
         );
@@ -1345,7 +1345,7 @@ contract LiquidModeTest is Test {
 
         // Mock the collect function
         vm.mockCall(
-            address(liquidMode.ezETHwrsETHPool()),
+            address(liquidMode.poolAddress()),
             abi.encodeWithSelector(IAlgebraPoolActions.collect.selector),
             abi.encode(feeAmount0, feeAmount1)
         );
@@ -1544,7 +1544,7 @@ contract LiquidModeTest is Test {
         deal(liquidMode.WRSETH(), address(liquidMode), yieldAmount / 2);
 
         vm.mockCall(
-            address(liquidMode.ezETHwrsETHPool()),
+            address(liquidMode.poolAddress()),
             abi.encodeWithSelector(IAlgebraPoolActions.collect.selector),
             abi.encode(yieldAmount / 2, yieldAmount / 2)
         );
@@ -1574,7 +1574,8 @@ contract LiquidModeTest is Test {
         // Assertions
         assertApproxEqRel(
             finalStrategistBalance,
-            initialStrategistBalance + claimAmount, 0.02e18,
+            initialStrategistBalance + claimAmount,
+            0.02e18,
             "Strategist balance should increase by claimed amount"
         );
         assertEq(
@@ -1603,9 +1604,8 @@ contract LiquidModeTest is Test {
         deal(liquidMode.EZETH(), address(liquidMode), yieldAmount / 2);
         deal(liquidMode.WRSETH(), address(liquidMode), yieldAmount / 2);
 
-
         vm.mockCall(
-            address(liquidMode.ezETHwrsETHPool()),
+            address(liquidMode.poolAddress()),
             abi.encodeWithSelector(IAlgebraPoolActions.collect.selector),
             abi.encode(yieldAmount / 2, yieldAmount / 2)
         );
@@ -1643,7 +1643,7 @@ contract LiquidModeTest is Test {
     }
 
     function testNonStrategistCannotClaimFees() public {
-    // Setup: Deposit some funds and generate fees
+        // Setup: Deposit some funds and generate fees
         uint256 depositAmount = 100 ether;
         uint256 yieldAmount = 10 ether; // 10% yield
 
@@ -1658,7 +1658,7 @@ contract LiquidModeTest is Test {
         deal(liquidMode.WRSETH(), address(liquidMode), yieldAmount / 2);
 
         vm.mockCall(
-            address(liquidMode.ezETHwrsETHPool()),
+            address(liquidMode.poolAddress()),
             abi.encodeWithSelector(IAlgebraPoolActions.collect.selector),
             abi.encode(yieldAmount / 2, yieldAmount / 2)
         );
@@ -1679,7 +1679,11 @@ contract LiquidModeTest is Test {
         // Attempt to claim fees as non-strategist
         uint256 claimAmount = initialAccumulatedFees / 2;
         vm.prank(nonStrategist);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, nonStrategist, STRATEGIST_ROLE));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, nonStrategist, STRATEGIST_ROLE
+            )
+        );
         liquidMode.claimStrategistFees(claimAmount);
 
         // Verify that the state hasn't changed
@@ -1713,7 +1717,7 @@ contract LiquidModeTest is Test {
 
         // Mock the collect function
         vm.mockCall(
-            address(liquidMode.ezETHwrsETHPool()),
+            address(liquidMode.poolAddress()),
             abi.encodeWithSelector(IAlgebraPoolActions.collect.selector),
             abi.encode(feeAmount0, feeAmount1)
         );
@@ -1727,7 +1731,11 @@ contract LiquidModeTest is Test {
         vm.startPrank(nonHarvester);
 
         // Attempt to call harvestReinvestAndReport as non-harvester
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, nonHarvester, liquidMode.HARVESTER_ROLE()));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, nonHarvester, liquidMode.HARVESTER_ROLE()
+            )
+        );
         liquidMode.harvestReinvestAndReport();
 
         // Stop pranking
@@ -1773,7 +1781,11 @@ contract LiquidModeTest is Test {
 
         // Attempt to perform maintenance as non-harvester
         vm.startPrank(nonHarvester);
-        vm.expectRevert(abi.encodeWithSelector(IAccessControl.AccessControlUnauthorizedAccount.selector, nonHarvester, liquidMode.HARVESTER_ROLE()));
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IAccessControl.AccessControlUnauthorizedAccount.selector, nonHarvester, liquidMode.HARVESTER_ROLE()
+            )
+        );
         liquidMode.performMaintenance();
         vm.stopPrank();
 
@@ -1798,7 +1810,6 @@ contract LiquidModeTest is Test {
         console.log("Final total assets:", finalTotalAssets);
         console.log("Final liquidity:", finalLiquidity);
     }
-
 
     function testInvestWithdrawReinvest() public {
         uint256 initialDepositAmount = 0.00411 ether;
@@ -1870,6 +1881,4 @@ contract LiquidModeTest is Test {
         console.log("Final Contract WRSETH Balance", finalContractWRSETHBalance);
         console.log("Final Contract EZETH Balance", finalContractEZETHBalance);
     }
-    
-    
 }
