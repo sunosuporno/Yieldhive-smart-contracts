@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import {console} from "forge-std/Test.sol";
 import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
@@ -180,6 +181,11 @@ contract LiquidMode is
         IERC20(token0).approve(address(nonfungiblePositionManager), amount0);
         IERC20(token1).approve(address(nonfungiblePositionManager), amount1);
 
+        console.log("amount0", amount0);
+        console.log("amount1", amount1);
+        console.log("minAmount0", amount0 * (10000 - liquiditySlippageTolerance) / 10000);
+        console.log("minAmount1", amount1 * (10000 - liquiditySlippageTolerance) / 10000);
+
         INonfungiblePositionManager.MintParams memory params = INonfungiblePositionManager.MintParams({
             token0: token0,
             token1: token1,
@@ -194,6 +200,8 @@ contract LiquidMode is
         });
 
         (tokenId, liquidity, depositedAmount0, depositedAmount1) = nonfungiblePositionManager.mint(params);
+
+        nonfungiblePositionManager.approveForFarming(tokenId, false, address(0));
 
         kimTokenId = tokenId;
         kimLiquidity = liquidity;
@@ -238,9 +246,12 @@ contract LiquidMode is
 
     function _removeLiquidityFromKIMPosition(uint256 amount0, uint256 amount1)
         internal
-        returns (uint256 removedAmount0, uint256 removedAmount1)
+        returns (uint256 removedAmount0, uint256 removedAmount1, uint128 _liquidity)
     {
-        uint128 _liquidity = _getLiquidityForAmounts(amount0, amount1);
+        console.log("running _removeLiquidityFromKIMPosition");
+        console.log("amount0", amount0);
+        console.log("amount1", amount1);
+        _liquidity = _getLiquidityForAmounts(amount0, amount1);
         INonfungiblePositionManager.DecreaseLiquidityParams memory params = INonfungiblePositionManager
             .DecreaseLiquidityParams({
             tokenId: kimPosition.tokenId,
@@ -251,10 +262,13 @@ contract LiquidMode is
         });
 
         (removedAmount0, removedAmount1) = nonfungiblePositionManager.decreaseLiquidity(params);
-
+        console.log("decreased liquidity", _liquidity);
         // Update the total liquidity
         require(kimLiquidity >= _liquidity, "Insufficient liquidity");
+        console.log("new liquidity", kimLiquidity);
+        console.log("removed liquidity", _liquidity);
         kimLiquidity -= _liquidity;
+        console.log("new liquidity", kimLiquidity);
 
         // Update the struct
         kimPosition = KIMPosition({
@@ -263,8 +277,8 @@ contract LiquidMode is
             amount0: kimPosition.amount0 > removedAmount0 ? kimPosition.amount0 - removedAmount0 : 0,
             amount1: kimPosition.amount1 > removedAmount1 ? kimPosition.amount1 - removedAmount1 : 0
         });
-
-        return (removedAmount0, removedAmount1);
+        console.log("completed _removeLiquidityFromKIMPosition");
+        return (removedAmount0, removedAmount1, _liquidity);
     }
 
     function _getLiquidityForAmounts(uint256 amount0, uint256 amount1) internal view returns (uint128 liquidity) {
@@ -292,18 +306,29 @@ contract LiquidMode is
         return nonfungiblePositionManager.collect(params);
     }
 
-    function _withdrawFunds(uint256 amount) internal returns (uint256 totalWETH) {
+    function _withdrawFunds(uint256 amount, uint256 shares) internal returns (uint256 totalWETH) {
         // Get the price feeds
         (int224 _token0Price,) = readDataFeed(token0EthProxy);
         uint256 token0Price = uint256(uint224(_token0Price));
         (int224 _token1Price,) = readDataFeed(token1EthProxy);
         uint256 token1Price = uint256(uint224(_token1Price));
 
-        uint256 token0Amount = (amount * 1e18) / (token0Price * 2);
-        uint256 token1Amount = (amount * 1e18) / (token1Price * 2);
+        console.log("totalSupply", totalSupply());
+
+        uint256 token0Amount = (kimPosition.amount0 * shares) / totalSupply();
+        uint256 token1Amount = (kimPosition.amount1 * shares) / totalSupply();
 
         // Take out liquidity from KIM position
-        (uint256 removedAmount0, uint256 removedAmount1) = _removeLiquidityFromKIMPosition(token0Amount, token1Amount);
+        (uint256 removedAmount0, uint256 removedAmount1, uint128 _liquidity) =
+            _removeLiquidityFromKIMPosition(token0Amount, token1Amount);
+
+        // //update kim position
+        // kimPosition = KIMPosition({
+        //     tokenId: kimPosition.tokenId,
+        //     liquidity: kimLiquidity - _liquidity,
+        //     amount0: kimPosition.amount0 - removedAmount0,
+        //     amount1: kimPosition.amount1 - removedAmount1
+        // });
 
         (uint256 receivedAmount0, uint256 receivedAmount1) = _collectKIMFees(removedAmount0, removedAmount1);
         // Swap token0 for WETH
@@ -458,8 +483,17 @@ contract LiquidMode is
     function claimStrategistFees(uint256 amount) external nonReentrant onlyRole(STRATEGIST_ROLE) {
         require(amount <= accumulatedStrategistFee, "Insufficient fees to claim");
 
+        // Convert fee amount to shares using the current price per share
+        uint256 shareAmount;
+        if (totalSupply() == 0) {
+            shareAmount = amount; // If no shares exist, amount = shares (1:1)
+        } else {
+            // Convert amount of assets to shares
+            shareAmount = convertToShares(amount);
+        }
+
         accumulatedStrategistFee -= amount;
-        uint256 wethWithdrawn = _withdrawFunds(amount);
+        uint256 wethWithdrawn = _withdrawFunds(amount, shareAmount);
         SafeERC20.safeTransfer(IERC20(asset()), strategist, wethWithdrawn);
         emit StrategistFeeClaimed(wethWithdrawn, accumulatedStrategistFee);
     }
@@ -569,9 +603,9 @@ contract LiquidMode is
             _spendAllowance(owner, caller, shares);
         }
 
+        console.log("running _withdraw");
+        uint256 wethWithdrawn = _withdrawFunds(assets, shares);
         _burn(owner, shares);
-
-        uint256 wethWithdrawn = _withdrawFunds(assets);
         _totalAccountedAssets -= assets;
         SafeERC20.safeTransfer(IERC20(asset()), receiver, wethWithdrawn);
 

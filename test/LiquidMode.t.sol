@@ -82,10 +82,10 @@ contract LiquidModeTest is Test {
             NONFUNGIBLE_POSITION_MANAGER,
             "NonfungiblePositionManager should be set correctly"
         );
-        assertEq(liquidMode.EZETH(), EZETH, "EZETH should be set correctly");
-        assertEq(liquidMode.WRSETH(), WRSETH, "WRSETH should be set correctly");
+        assertEq(liquidMode.token0(), EZETH, "EZETH should be set correctly");
+        assertEq(liquidMode.token1(), WRSETH, "WRSETH should be set correctly");
         assertEq(address(liquidMode.WETH()), WETH, "WETH should be set correctly");
-        assertEq(liquidMode.poolAddress(), EZETH_WRSETH_POOL, "poolAddress should be set correctly");
+        assertEq(liquidMode.currentPool(), EZETH_WRSETH_POOL, "poolAddress should be set correctly");
         assertEq(address(liquidMode.swapRouter()), SWAP_ROUTER, "SwapRouter should be set correctly");
         assertEq(liquidMode.treasury(), TREASURY, "Treasury should be set correctly");
     }
