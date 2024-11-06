@@ -71,10 +71,9 @@ contract LiquidMode is
     // New state variables
     address public token0;
     address public token1;
-    address public currentPool;
+    address public poolAddress;
     address public token0EthProxy;
     address public token1EthProxy;
-    address public poolAddress;
 
     // Struct definition
     struct KIMPosition {
