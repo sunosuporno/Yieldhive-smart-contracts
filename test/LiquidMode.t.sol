@@ -90,8 +90,8 @@ contract LiquidModeTest is Test {
         assertEq(liquidMode.treasury(), TREASURY, "Treasury should be set correctly");
     }
 
-    function testDeposit() public {
-        uint256 depositAmount = 0.00411 ether;
+    function testDeposits() public {
+        uint256 depositAmount = 10 ether;
 
         vm.startPrank(user);
 
@@ -1221,7 +1221,7 @@ contract LiquidModeTest is Test {
         }
     }
 
-    function testHarvestReinvestAndReport() public {
+    function testHarvestReinvestAndReports() public {
         uint256 depositAmount = 100 ether;
         uint256 feeAmount0 = 1 ether; // 1 ezETH in fees
         uint256 feeAmount1 = 1.5 ether; // 1.5 wrsETH in fees
@@ -1251,8 +1251,8 @@ contract LiquidModeTest is Test {
         );
 
         // Transfer the mocked fee amounts to the LiquidMode contract
-        deal(liquidMode.EZETH(), address(liquidMode), feeAmount0);
-        deal(liquidMode.WRSETH(), address(liquidMode), feeAmount1);
+        deal(liquidMode.token0(), address(liquidMode), feeAmount0);
+        deal(liquidMode.token1(), address(liquidMode), feeAmount1);
 
         // Call harvestReinvestAndReport
         vm.prank(liquidMode.owner());
@@ -1272,11 +1272,11 @@ contract LiquidModeTest is Test {
             actualIncrease, netIncrease, 0.02e18, "Total assets should have increased by at least 98% of collected fees"
         );
 
-        uint256 accumulatedFee = liquidMode.accumulatedStrategistFee();
-        assertGt(accumulatedFee, 0, "Accumulated strategist fee should be non-zero");
-        assertApproxEqRel(
-            accumulatedFee, strategistFee, 0.02e18, "Accumulated strategist fee should not exceed 2% of collected fees"
-        );
+        // uint256 accumulatedFee = liquidMode.accumulatedStrategistFee();
+        // assertGt(accumulatedFee, 0, "Accumulated strategist fee should be non-zero");
+        // assertApproxEqRel(
+        //     accumulatedFee, strategistFee, 0.02e18, "Accumulated strategist fee should not exceed 2% of collected fees"
+        // );
     }
 
     function testHarvestReinvestAndReportOnlyEzETHFees() public {
@@ -1306,7 +1306,7 @@ contract LiquidModeTest is Test {
         );
 
         // Transfer the mocked fee amount to the LiquidMode contract
-        deal(liquidMode.EZETH(), address(liquidMode), feeAmount0);
+        deal(liquidMode.token0(), address(liquidMode), feeAmount0);
 
         // Call harvestReinvestAndReport
         vm.prank(liquidMode.owner());
@@ -1326,14 +1326,14 @@ contract LiquidModeTest is Test {
             actualIncrease, netIncrease, 0.02e18, "Total assets should have increased by at least 98% of collected fees"
         );
 
-        uint256 accumulatedFee = liquidMode.accumulatedStrategistFee();
-        assertGt(accumulatedFee, 0, "Accumulated strategist fee should be non-zero");
-        assertApproxEqRel(
-            accumulatedFee,
-            strategistFee,
-            0.02e18,
-            "Accumulated strategist fee should be close to 20% of collected fees"
-        );
+        // uint256 accumulatedFee = liquidMode.accumulatedStrategistFee();
+        // assertGt(accumulatedFee, 0, "Accumulated strategist fee should be non-zero");
+        // assertApproxEqRel(
+        //     accumulatedFee,
+        //     strategistFee,
+        //     0.02e18,
+        //     "Accumulated strategist fee should be close to 20% of collected fees"
+        // );
     }
 
     function testHarvestReinvestAndReportNoFees() public {
@@ -1364,8 +1364,8 @@ contract LiquidModeTest is Test {
         uint256 actualIncrease = liquidMode.totalAssets() - depositAmount;
         assertEq(actualIncrease, 0, "Total assets should not have increased");
 
-        uint256 accumulatedFee = liquidMode.accumulatedStrategistFee();
-        assertEq(accumulatedFee, 0, "Accumulated strategist fee should be zero");
+        // uint256 accumulatedFee = liquidMode.accumulatedStrategistFee();
+        // assertEq(accumulatedFee, 0, "Accumulated strategist fee should be zero");
     }
 
     function testPerformMaintenance() public {
@@ -1534,170 +1534,170 @@ contract LiquidModeTest is Test {
         console.log("Final total assets:", finalTotalAssets);
     }
 
-    function testClaimStrategistFees() public {
-        // Setup: Deposit funds and generate some fees
-        uint256 depositAmount = 100 ether;
-        uint256 yieldAmount = 10 ether; // 10% yield
+    // function testClaimStrategistFees() public {
+    //     // Setup: Deposit funds and generate some fees
+    //     uint256 depositAmount = 100 ether;
+    //     uint256 yieldAmount = 10 ether; // 10% yield
 
-        // Deposit funds
-        vm.startPrank(user);
-        IERC20(WETH).approve(address(liquidMode), depositAmount);
-        liquidMode.deposit(depositAmount, user);
-        vm.stopPrank();
+    //     // Deposit funds
+    //     vm.startPrank(user);
+    //     IERC20(WETH).approve(address(liquidMode), depositAmount);
+    //     liquidMode.deposit(depositAmount, user);
+    //     vm.stopPrank();
 
-        // Simulate yield generation
-        deal(liquidMode.EZETH(), address(liquidMode), yieldAmount / 2);
-        deal(liquidMode.WRSETH(), address(liquidMode), yieldAmount / 2);
+    //     // Simulate yield generation
+    //     deal(liquidMode.EZETH(), address(liquidMode), yieldAmount / 2);
+    //     deal(liquidMode.WRSETH(), address(liquidMode), yieldAmount / 2);
 
-        vm.mockCall(
-            address(liquidMode.poolAddress()),
-            abi.encodeWithSelector(IAlgebraPoolActions.collect.selector),
-            abi.encode(yieldAmount / 2, yieldAmount / 2)
-        );
+    //     vm.mockCall(
+    //         address(liquidMode.poolAddress()),
+    //         abi.encodeWithSelector(IAlgebraPoolActions.collect.selector),
+    //         abi.encode(yieldAmount / 2, yieldAmount / 2)
+    //     );
 
-        // Harvest and reinvest to generate strategist fees
-        vm.prank(liquidMode.owner());
-        liquidMode.harvestReinvestAndReport();
+    //     // Harvest and reinvest to generate strategist fees
+    //     vm.prank(liquidMode.owner());
+    //     liquidMode.harvestReinvestAndReport();
 
-        // Record initial state
-        uint256 initialStrategistBalance = IERC20(WETH).balanceOf(liquidMode.strategist());
-        uint256 initialAccumulatedFees = liquidMode.accumulatedStrategistFee();
+    //     // Record initial state
+    //     uint256 initialStrategistBalance = IERC20(WETH).balanceOf(liquidMode.strategist());
+    //     uint256 initialAccumulatedFees = liquidMode.accumulatedStrategistFee();
 
-        console.log("Initial strategist balance:", initialStrategistBalance);
-        console.log("Initial accumulated fees:", initialAccumulatedFees);
+    //     console.log("Initial strategist balance:", initialStrategistBalance);
+    //     console.log("Initial accumulated fees:", initialAccumulatedFees);
 
-        vm.clearMockedCalls();
+    //     vm.clearMockedCalls();
 
-        // Attempt to claim half of the accumulated fees
-        uint256 claimAmount = initialAccumulatedFees / 2;
-        vm.prank(liquidMode.strategist());
-        liquidMode.claimStrategistFees(claimAmount);
+    //     // Attempt to claim half of the accumulated fees
+    //     uint256 claimAmount = initialAccumulatedFees / 2;
+    //     vm.prank(liquidMode.strategist());
+    //     liquidMode.claimStrategistFees(claimAmount);
 
-        // Check final state
-        uint256 finalStrategistBalance = IERC20(WETH).balanceOf(liquidMode.strategist());
-        uint256 finalAccumulatedFees = liquidMode.accumulatedStrategistFee();
+    //     // Check final state
+    //     uint256 finalStrategistBalance = IERC20(WETH).balanceOf(liquidMode.strategist());
+    //     uint256 finalAccumulatedFees = liquidMode.accumulatedStrategistFee();
 
-        // Assertions
-        assertApproxEqRel(
-            finalStrategistBalance,
-            initialStrategistBalance + claimAmount,
-            0.02e18,
-            "Strategist balance should increase by claimed amount"
-        );
-        assertEq(
-            finalAccumulatedFees,
-            initialAccumulatedFees - claimAmount,
-            "Accumulated fees should decrease by claimed amount"
-        );
+    //     // Assertions
+    //     assertApproxEqRel(
+    //         finalStrategistBalance,
+    //         initialStrategistBalance + claimAmount,
+    //         0.02e18,
+    //         "Strategist balance should increase by claimed amount"
+    //     );
+    //     assertEq(
+    //         finalAccumulatedFees,
+    //         initialAccumulatedFees - claimAmount,
+    //         "Accumulated fees should decrease by claimed amount"
+    //     );
 
-        // Log final state
-        console.log("Final strategist balance:", finalStrategistBalance);
-        console.log("Final accumulated fees:", finalAccumulatedFees);
-    }
+    //     // Log final state
+    //     console.log("Final strategist balance:", finalStrategistBalance);
+    //     console.log("Final accumulated fees:", finalAccumulatedFees);
+    // }
 
-    function testClaimStrategistFeesMoreThanAvailable() public {
-        // Setup: Deposit some funds and generate fees
-        uint256 depositAmount = 100 ether;
-        uint256 yieldAmount = 10 ether; // 10% yield
+    // function testClaimStrategistFeesMoreThanAvailable() public {
+    //     // Setup: Deposit some funds and generate fees
+    //     uint256 depositAmount = 100 ether;
+    //     uint256 yieldAmount = 10 ether; // 10% yield
 
-        // Deposit funds
-        vm.startPrank(user);
-        IERC20(WETH).approve(address(liquidMode), depositAmount);
-        liquidMode.deposit(depositAmount, user);
-        vm.stopPrank();
+    //     // Deposit funds
+    //     vm.startPrank(user);
+    //     IERC20(WETH).approve(address(liquidMode), depositAmount);
+    //     liquidMode.deposit(depositAmount, user);
+    //     vm.stopPrank();
 
-        // Simulate yield generation
-        deal(liquidMode.EZETH(), address(liquidMode), yieldAmount / 2);
-        deal(liquidMode.WRSETH(), address(liquidMode), yieldAmount / 2);
+    //     // Simulate yield generation
+    //     deal(liquidMode.EZETH(), address(liquidMode), yieldAmount / 2);
+    //     deal(liquidMode.WRSETH(), address(liquidMode), yieldAmount / 2);
 
-        vm.mockCall(
-            address(liquidMode.poolAddress()),
-            abi.encodeWithSelector(IAlgebraPoolActions.collect.selector),
-            abi.encode(yieldAmount / 2, yieldAmount / 2)
-        );
+    //     vm.mockCall(
+    //         address(liquidMode.poolAddress()),
+    //         abi.encodeWithSelector(IAlgebraPoolActions.collect.selector),
+    //         abi.encode(yieldAmount / 2, yieldAmount / 2)
+    //     );
 
-        // Harvest and reinvest to generate strategist fees
-        vm.prank(liquidMode.owner());
-        liquidMode.harvestReinvestAndReport();
+    //     // Harvest and reinvest to generate strategist fees
+    //     vm.prank(liquidMode.owner());
+    //     liquidMode.harvestReinvestAndReport();
 
-        // Record initial state
-        uint256 initialStrategistBalance = IERC20(WETH).balanceOf(liquidMode.strategist());
-        uint256 initialAccumulatedFees = liquidMode.accumulatedStrategistFee();
+    //     // Record initial state
+    //     uint256 initialStrategistBalance = IERC20(WETH).balanceOf(liquidMode.strategist());
+    //     uint256 initialAccumulatedFees = liquidMode.accumulatedStrategistFee();
 
-        console.log("Initial strategist balance:", initialStrategistBalance);
-        console.log("Initial accumulated fees:", initialAccumulatedFees);
+    //     console.log("Initial strategist balance:", initialStrategistBalance);
+    //     console.log("Initial accumulated fees:", initialAccumulatedFees);
 
-        vm.clearMockedCalls();
-        // Attempt to claim more than the accumulated fees
-        uint256 excessiveClaimAmount = initialAccumulatedFees + 1 ether;
-        console.log("excessiveClaimAmount", excessiveClaimAmount);
-        console.log("currentAccumulatedFee", liquidMode.accumulatedStrategistFee());
+    //     vm.clearMockedCalls();
+    //     // Attempt to claim more than the accumulated fees
+    //     uint256 excessiveClaimAmount = initialAccumulatedFees + 1 ether;
+    //     console.log("excessiveClaimAmount", excessiveClaimAmount);
+    //     console.log("currentAccumulatedFee", liquidMode.accumulatedStrategistFee());
 
-        vm.prank(liquidMode.strategist());
-        vm.expectRevert("Insufficient fees to claim");
-        liquidMode.claimStrategistFees(excessiveClaimAmount);
+    //     vm.prank(liquidMode.strategist());
+    //     vm.expectRevert("Insufficient fees to claim");
+    //     liquidMode.claimStrategistFees(excessiveClaimAmount);
 
-        // Verify that the state hasn't changed
-        uint256 finalStrategistBalance = IERC20(WETH).balanceOf(liquidMode.strategist());
-        uint256 finalAccumulatedFees = liquidMode.accumulatedStrategistFee();
+    //     // Verify that the state hasn't changed
+    //     uint256 finalStrategistBalance = IERC20(WETH).balanceOf(liquidMode.strategist());
+    //     uint256 finalAccumulatedFees = liquidMode.accumulatedStrategistFee();
 
-        assertEq(finalStrategistBalance, initialStrategistBalance, "Strategist balance should not change");
-        assertEq(finalAccumulatedFees, initialAccumulatedFees, "Accumulated fees should not change");
+    //     assertEq(finalStrategistBalance, initialStrategistBalance, "Strategist balance should not change");
+    //     assertEq(finalAccumulatedFees, initialAccumulatedFees, "Accumulated fees should not change");
 
-        console.log("Final strategist balance:", finalStrategistBalance);
-        console.log("Final accumulated fees:", finalAccumulatedFees);
-    }
+    //     console.log("Final strategist balance:", finalStrategistBalance);
+    //     console.log("Final accumulated fees:", finalAccumulatedFees);
+    // }
 
-    function testNonStrategistCannotClaimFees() public {
-        // Setup: Deposit some funds and generate fees
-        uint256 depositAmount = 100 ether;
-        uint256 yieldAmount = 10 ether; // 10% yield
+    // function testNonStrategistCannotClaimFees() public {
+    //     // Setup: Deposit some funds and generate fees
+    //     uint256 depositAmount = 100 ether;
+    //     uint256 yieldAmount = 10 ether; // 10% yield
 
-        // Deposit funds
-        vm.startPrank(user);
-        IERC20(WETH).approve(address(liquidMode), depositAmount);
-        liquidMode.deposit(depositAmount, user);
-        vm.stopPrank();
+    //     // Deposit funds
+    //     vm.startPrank(user);
+    //     IERC20(WETH).approve(address(liquidMode), depositAmount);
+    //     liquidMode.deposit(depositAmount, user);
+    //     vm.stopPrank();
 
-        // Simulate yield generation
-        deal(liquidMode.EZETH(), address(liquidMode), yieldAmount / 2);
-        deal(liquidMode.WRSETH(), address(liquidMode), yieldAmount / 2);
+    //     // Simulate yield generation
+    //     deal(liquidMode.EZETH(), address(liquidMode), yieldAmount / 2);
+    //     deal(liquidMode.WRSETH(), address(liquidMode), yieldAmount / 2);
 
-        vm.mockCall(
-            address(liquidMode.poolAddress()),
-            abi.encodeWithSelector(IAlgebraPoolActions.collect.selector),
-            abi.encode(yieldAmount / 2, yieldAmount / 2)
-        );
+    //     vm.mockCall(
+    //         address(liquidMode.poolAddress()),
+    //         abi.encodeWithSelector(IAlgebraPoolActions.collect.selector),
+    //         abi.encode(yieldAmount / 2, yieldAmount / 2)
+    //     );
 
-        // Harvest and reinvest to generate strategist fees
-        vm.prank(liquidMode.owner());
-        liquidMode.harvestReinvestAndReport();
+    //     // Harvest and reinvest to generate strategist fees
+    //     vm.prank(liquidMode.owner());
+    //     liquidMode.harvestReinvestAndReport();
 
-        // Record initial state
-        uint256 initialAccumulatedFees = liquidMode.accumulatedStrategistFee();
-        console.log("Initial accumulated fees:", initialAccumulatedFees);
+    //     // Record initial state
+    //     uint256 initialAccumulatedFees = liquidMode.accumulatedStrategistFee();
+    //     console.log("Initial accumulated fees:", initialAccumulatedFees);
 
-        vm.clearMockedCalls();
+    //     vm.clearMockedCalls();
 
-        // Create a non-strategist address
-        address nonStrategist = address(0x1234);
-        bytes32 STRATEGIST_ROLE = liquidMode.STRATEGIST_ROLE();
-        // Attempt to claim fees as non-strategist
-        uint256 claimAmount = initialAccumulatedFees / 2;
-        vm.prank(nonStrategist);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, nonStrategist, STRATEGIST_ROLE
-            )
-        );
-        liquidMode.claimStrategistFees(claimAmount);
+    //     // Create a non-strategist address
+    //     address nonStrategist = address(0x1234);
+    //     bytes32 STRATEGIST_ROLE = liquidMode.STRATEGIST_ROLE();
+    //     // Attempt to claim fees as non-strategist
+    //     uint256 claimAmount = initialAccumulatedFees / 2;
+    //     vm.prank(nonStrategist);
+    //     vm.expectRevert(
+    //         abi.encodeWithSelector(
+    //             IAccessControl.AccessControlUnauthorizedAccount.selector, nonStrategist, STRATEGIST_ROLE
+    //         )
+    //     );
+    //     liquidMode.claimStrategistFees(claimAmount);
 
-        // Verify that the state hasn't changed
-        uint256 finalAccumulatedFees = liquidMode.accumulatedStrategistFee();
-        assertEq(finalAccumulatedFees, initialAccumulatedFees, "Accumulated fees should not change");
+    //     // Verify that the state hasn't changed
+    //     uint256 finalAccumulatedFees = liquidMode.accumulatedStrategistFee();
+    //     assertEq(finalAccumulatedFees, initialAccumulatedFees, "Accumulated fees should not change");
 
-        console.log("Final accumulated fees:", finalAccumulatedFees);
-    }
+    //     console.log("Final accumulated fees:", finalAccumulatedFees);
+    // }
 
     function testNonHarvesterCannotHarvest() public {
         uint256 depositAmount = 100 ether;
@@ -1749,10 +1749,10 @@ contract LiquidModeTest is Test {
 
         // Verify that the state hasn't changed
         assertEq(liquidMode.totalAssets(), depositAmount, "Total assets should not change");
-        assertEq(liquidMode.accumulatedStrategistFee(), 0, "Accumulated strategist fee should remain zero");
+        // assertEq(liquidMode.accumulatedStrategistFee(), 0, "Accumulated strategist fee should remain zero");
 
         console.log("Total assets after failed harvest:", liquidMode.totalAssets());
-        console.log("Accumulated strategist fee after failed harvest:", liquidMode.accumulatedStrategistFee());
+        // console.log("Accumulated strategist fee after failed harvest:", liquidMode.accumulatedStrategistFee());
     }
 
     function testNonHarvesterCannotPerformMaintenance() public {

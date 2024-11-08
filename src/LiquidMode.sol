@@ -44,8 +44,8 @@ contract LiquidMode is
     uint256 public constant MAX_STRATEGIST_FEE_PERCENTAGE = 3000; // 30% maximum
     uint256 public constant MAX_MANAGEMENT_FEE_PERCENTAGE = 500; // 5% maximum
     uint256 public constant MANAGEMENT_FEE_INTERVAL = 365 days;
-    int24 public BOTTOM_TICK = -3360;
-    int24 public TOP_TICK = 3360;
+    int24 public BOTTOM_TICK = -1020;
+    int24 public TOP_TICK = 1020;
 
     // Immutable variables
     IWETH9 public immutable WETH;
@@ -59,7 +59,6 @@ contract LiquidMode is
     uint128 public kimLiquidity;
     uint256 public totalDeposits;
     uint256 public _totalAccountedAssets;
-    uint256 public accumulatedStrategistFee;
     uint256 public lastManagementFeeCollection;
     uint256 public liquiditySlippageTolerance = 500; // 5% default for liquidity operations
     uint256 public swapSlippageTolerance = 200; // 2% default for swaps
@@ -164,8 +163,10 @@ contract LiquidMode is
     function _investFunds(uint256 amount) internal {
         // uint256 receivedEzETH = xRenzoDeposit.depositETH{value: amount / 2}(0, block.timestamp);
         // rSETHPoolV2.deposit{value: amount / 2}("");
-        uint256 receivedToken0 = _swapForToken(amount / 2, address(WETH), token0);
-        uint256 receivedToken1 = _swapForToken(amount / 2, address(WETH), token1);
+        (uint256 amount0, uint256 amount1) = _calculateOptimalRatio(amount);
+
+        uint256 receivedToken0 = _swapForToken(amount0, address(WETH), token0);
+        uint256 receivedToken1 = _swapForToken(amount1, address(WETH), token1);
         if (kimPosition.tokenId == 0) {
             _createKIMPosition(receivedToken0, receivedToken1);
         } else {
@@ -377,10 +378,43 @@ contract LiquidMode is
         amountOut = swapRouter.exactInputSingle(params);
     }
 
+    function _calculateOptimalRatio(uint256 amount) internal view returns (uint256 amount0, uint256 amount1) {
+        (int224 _token0Price,) = readDataFeed(token0EthProxy);
+        uint256 token0Price = uint256(uint224(_token0Price));
+        (int224 _token1Price,) = readDataFeed(token1EthProxy);
+        uint256 token1Price = uint256(uint224(_token1Price));
+
+        // amount in ezETH terms
+        uint256 ezETHAmount = amount / token0Price;
+
+        uint160 sqrtPriceX96 = PoolInteraction._getSqrtPrice(IAlgebraPool(poolAddress));
+        uint160 sqrtPriceLowerX96 = TickMath.getSqrtRatioAtTick(BOTTOM_TICK);
+        uint160 sqrtPriceUpperX96 = TickMath.getSqrtRatioAtTick(TOP_TICK);
+
+        // Calculate liquidity for total amount (in WETH terms)
+        uint128 liquidity = LiquidityAmounts.getLiquidityForAmount0(
+            sqrtPriceLowerX96,
+            sqrtPriceUpperX96,
+            ezETHAmount
+        );
+
+        // Get optimal token amounts for this liquidity
+        (amount0, amount1) = LiquidityAmounts.getAmountsForLiquidity(
+            sqrtPriceX96,
+            sqrtPriceLowerX96,
+            sqrtPriceUpperX96,
+            liquidity
+        );
+
+        //convert amount in terms of WETH
+        amount0 = amount0 * token0Price / 1e18;
+        amount1 = amount1 * token1Price / 1e18;
+    }
+
     function harvestReinvestAndReport() external nonReentrant onlyRole(HARVESTER_ROLE) {
         (uint256 amount0, uint256 amount1) = _collectKIMFees(0, 0);
         if (amount0 > 0 || amount1 > 0) {
-            //convert the amount of token1 and token2 to ETH
+            // Convert amounts to ETH value for fee calculation
             (int224 _token0Price,) = readDataFeed(token0EthProxy);
             uint256 token0Price = uint256(uint224(_token0Price));
             (int224 _token1Price,) = readDataFeed(token1EthProxy);
@@ -388,33 +422,50 @@ contract LiquidMode is
 
             uint256 amount0InETH = amount0 > 0 ? (amount0 * token0Price) / 10 ** 18 : 0;
             uint256 amount1InETH = amount1 > 0 ? (amount1 * token1Price) / 10 ** 18 : 0;
-            uint256 token0ToReinvest;
-            uint256 token1ToReinvest;
 
+            // Calculate strategist's share
+            uint256 totalProfitInETH = amount0InETH + amount1InETH;
+            uint256 strategistShare = (totalProfitInETH * strategistFeePercentage) / 10000;
+
+            // Calculate token amounts for strategist
+            uint256 strategistAmount0 = (amount0 * strategistFeePercentage) / 10000;
+            uint256 strategistAmount1 = (amount1 * strategistFeePercentage) / 10000;
+
+            // Transfer strategist's share directly
+            if (strategistAmount0 > 0) IERC20(token0).transfer(strategist, strategistAmount0);
+            if (strategistAmount1 > 0) IERC20(token1).transfer(strategist, strategistAmount1);
+
+            // Reinvest remaining amounts
+            uint256 token0ToReinvest = amount0 - strategistAmount0;
+            uint256 token1ToReinvest = amount1 - strategistAmount1;
+
+            // Balance assets if needed
             if (amount0InETH > amount1InETH) {
                 (uint256 amountToSwapInToken, uint256 amountOutForLowerToken) =
-                    _balanceAssets(amount0InETH, amount1InETH, token0Price, token0, token1);
-                token0ToReinvest = amount0 - amountToSwapInToken;
-                token1ToReinvest = amount1 + amountOutForLowerToken;
+                    _balanceAssets(amount0InETH - strategistShare, amount1InETH, token0Price, token0, token1);
+                token0ToReinvest -= amountToSwapInToken;
+                token1ToReinvest += amountOutForLowerToken;
             } else if (amount1InETH > amount0InETH) {
                 (uint256 amountToSwapInToken, uint256 amountOutForLowerToken) =
-                    _balanceAssets(amount1InETH, amount0InETH, token1Price, token1, token0);
-                token0ToReinvest = amount0 + amountOutForLowerToken;
-                token1ToReinvest = amount1 - amountToSwapInToken;
+                    _balanceAssets(amount1InETH - strategistShare, amount0InETH, token1Price, token1, token0);
+                token0ToReinvest += amountOutForLowerToken;
+                token1ToReinvest -= amountToSwapInToken;
             }
 
-            uint256 token0ToReinvestInETH = token0ToReinvest * token0Price / 10 ** 18;
-            uint256 token1ToReinvestInETH = token1ToReinvest * token1Price / 10 ** 18;
+            // Update total assets (excluding strategist fee)
+            _totalAccountedAssets += totalProfitInETH - strategistShare;
 
-            uint256 totalProfit = token0ToReinvestInETH + token1ToReinvestInETH;
-            uint256 performanceFee = (totalProfit * strategistFeePercentage) / 10000;
-            accumulatedStrategistFee += performanceFee;
-            _totalAccountedAssets += totalProfit - performanceFee;
-
+            // Reinvest remaining tokens
             (uint128 reinvestedLiquidity,,) = _addLiquidityToKIMPosition(token0ToReinvest, token1ToReinvest);
 
             emit HarvestReinvestReport(
-                amount0, amount1, token0ToReinvest, token1ToReinvest, totalProfit, performanceFee, reinvestedLiquidity
+                amount0,
+                amount1,
+                token0ToReinvest,
+                token1ToReinvest,
+                totalProfitInETH,
+                strategistShare,
+                reinvestedLiquidity
             );
         }
     }
@@ -477,24 +528,6 @@ contract LiquidMode is
         uint256 amountToSwapInETH = difference / 2;
         amountToSwapInToken = amountToSwapInETH * 10 ** 18 / higherPrice;
         amountOutForLowerToken = _swapForToken(amountToSwapInToken, tokenIn, tokenOut);
-    }
-
-    function claimStrategistFees(uint256 amount) external nonReentrant onlyRole(STRATEGIST_ROLE) {
-        require(amount <= accumulatedStrategistFee, "Insufficient fees to claim");
-
-        // Convert fee amount to shares using the current price per share
-        uint256 shareAmount;
-        if (totalSupply() == 0) {
-            shareAmount = amount; // If no shares exist, amount = shares (1:1)
-        } else {
-            // Convert amount of assets to shares
-            shareAmount = convertToShares(amount);
-        }
-
-        accumulatedStrategistFee -= amount;
-        uint256 wethWithdrawn = _withdrawFunds(amount, shareAmount);
-        SafeERC20.safeTransfer(IERC20(asset()), strategist, wethWithdrawn);
-        emit StrategistFeeClaimed(wethWithdrawn, accumulatedStrategistFee);
     }
 
     function totalAssets() public view override returns (uint256) {
@@ -708,7 +741,7 @@ contract LiquidMode is
         require(newToken1 != address(0), "Invalid token1 address");
         require(newToken1EthProxy != address(0), "Invalid token1 proxy address");
         require(newPoolAddress != address(0), "Invalid pool address");
-        require(accumulatedStrategistFee == 0, "Pending strategist fees must be claimed");
+        require(strategistFeePercentage == 0, "Strategist fees must be claimed");
 
         token0 = newToken0;
         token0EthProxy = newToken0EthProxy;
