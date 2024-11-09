@@ -170,7 +170,7 @@ contract LiquidMode is
         if (kimPosition.tokenId == 0) {
             _createKIMPosition(receivedToken0, receivedToken1);
         } else {
-            _addLiquidityToKIMPosition(receivedToken0, receivedToken1);
+            _addLiquidityToKIMPosition(receivedToken0, receivedToken1, true, true);
         }
     }
 
@@ -211,7 +211,7 @@ contract LiquidMode is
             KIMPosition({tokenId: tokenId, liquidity: liquidity, amount0: depositedAmount0, amount1: depositedAmount1});
     }
 
-    function _addLiquidityToKIMPosition(uint256 amount0, uint256 amount1)
+    function _addLiquidityToKIMPosition(uint256 amount0, uint256 amount1, bool minAmount0, bool minAmount1)
         internal
         returns (uint128 liquidity, uint256 addedAmount0, uint256 addedAmount1)
     {
@@ -223,8 +223,8 @@ contract LiquidMode is
             tokenId: kimPosition.tokenId,
             amount0Desired: amount0,
             amount1Desired: amount1,
-            amount0Min: (amount0 * (10000 - liquiditySlippageTolerance)) / 10000,
-            amount1Min: (amount1 * (10000 - liquiditySlippageTolerance)) / 10000,
+            amount0Min: minAmount0 ? (amount0 * (10000 - liquiditySlippageTolerance)) / 10000 : 0,
+            amount1Min: minAmount1 ? (amount1 * (10000 - liquiditySlippageTolerance)) / 10000 : 0,
             deadline: block.timestamp
         });
 
@@ -385,27 +385,20 @@ contract LiquidMode is
         uint256 token1Price = uint256(uint224(_token1Price));
 
         // amount in ezETH terms
-        uint256 ezETHAmount = amount / token0Price;
+        uint256 ezETHAmount = amount * 1e18 / token0Price;
 
         uint160 sqrtPriceX96 = PoolInteraction._getSqrtPrice(IAlgebraPool(poolAddress));
         uint160 sqrtPriceLowerX96 = TickMath.getSqrtRatioAtTick(BOTTOM_TICK);
         uint160 sqrtPriceUpperX96 = TickMath.getSqrtRatioAtTick(TOP_TICK);
 
         // Calculate liquidity for total amount (in WETH terms)
-        uint128 liquidity = LiquidityAmounts.getLiquidityForAmount0(
-            sqrtPriceLowerX96,
-            sqrtPriceUpperX96,
-            ezETHAmount
-        );
+        uint128 liquidity = LiquidityAmounts.getLiquidityForAmount0(sqrtPriceLowerX96, sqrtPriceUpperX96, ezETHAmount);
 
         // Get optimal token amounts for this liquidity
-        (amount0, amount1) = LiquidityAmounts.getAmountsForLiquidity(
-            sqrtPriceX96,
-            sqrtPriceLowerX96,
-            sqrtPriceUpperX96,
-            liquidity
-        );
-
+        (amount0, amount1) =
+            LiquidityAmounts.getAmountsForLiquidity(sqrtPriceX96, sqrtPriceLowerX96, sqrtPriceUpperX96, liquidity);
+        console.log("amount0", amount0);
+        console.log("amount1", amount1);
         //convert amount in terms of WETH
         amount0 = amount0 * token0Price / 1e18;
         amount1 = amount1 * token1Price / 1e18;
@@ -426,6 +419,7 @@ contract LiquidMode is
             // Calculate strategist's share
             uint256 totalProfitInETH = amount0InETH + amount1InETH;
             uint256 strategistShare = (totalProfitInETH * strategistFeePercentage) / 10000;
+            uint256 netProfitInETH = totalProfitInETH - strategistShare;
 
             // Calculate token amounts for strategist
             uint256 strategistAmount0 = (amount0 * strategistFeePercentage) / 10000;
@@ -435,28 +429,89 @@ contract LiquidMode is
             if (strategistAmount0 > 0) IERC20(token0).transfer(strategist, strategistAmount0);
             if (strategistAmount1 > 0) IERC20(token1).transfer(strategist, strategistAmount1);
 
-            // Reinvest remaining amounts
-            uint256 token0ToReinvest = amount0 - strategistAmount0;
-            uint256 token1ToReinvest = amount1 - strategistAmount1;
+            uint256 remainingToken0 = IERC20(token0).balanceOf(address(this));
+            uint256 remainingToken1 = IERC20(token1).balanceOf(address(this));
 
-            // Balance assets if needed
-            if (amount0InETH > amount1InETH) {
-                (uint256 amountToSwapInToken, uint256 amountOutForLowerToken) =
-                    _balanceAssets(amount0InETH - strategistShare, amount1InETH, token0Price, token0, token1);
-                token0ToReinvest -= amountToSwapInToken;
-                token1ToReinvest += amountOutForLowerToken;
-            } else if (amount1InETH > amount0InETH) {
-                (uint256 amountToSwapInToken, uint256 amountOutForLowerToken) =
-                    _balanceAssets(amount1InETH - strategistShare, amount0InETH, token1Price, token1, token0);
-                token0ToReinvest += amountOutForLowerToken;
-                token1ToReinvest -= amountToSwapInToken;
-            }
+            uint256 remainingToken0InETH = remainingToken0 * token0Price / 1e18;
+            uint256 remainingToken1InETH = remainingToken1 * token1Price / 1e18;
+
+            console.log("remainingToken0InETH", remainingToken0InETH);
+            console.log("remainingToken1InETH", remainingToken1InETH);
+
+            (uint256 token0ToReinvestInETH, uint256 token1ToReinvestInETH) =
+                _calculateOptimalRatio(remainingToken0InETH + remainingToken1InETH);
+
+            uint256 token0ToReinvest = token0ToReinvestInETH * 1e18 / token0Price;
+            uint256 token1ToReinvest = token1ToReinvestInETH * 1e18 / token1Price;
+
+            console.log("token0ToReinvest", token0ToReinvest);
+            console.log("token1ToReinvest", token1ToReinvest);
+
+            console.log("remainingToken0", remainingToken0);
+            console.log("remainingToken1", remainingToken1);
+
+            _balanceAssets(token0ToReinvest, token1ToReinvest, remainingToken0, remainingToken1);
+
+            uint256 newToken0Balance = IERC20(token0).balanceOf(address(this));
+            uint256 newToken1Balance = IERC20(token1).balanceOf(address(this));
+
+            console.log("newToken0Balance", newToken0Balance);
+            console.log("newToken1Balance", newToken1Balance);
+
+            // // Balance assets if needed
+            // if (amount0InETH > amount1InETH) {
+            //     (uint256 amountToSwapInToken, uint256 amountOutForLowerToken) =
+            //         _balanceAssets(amount0InETH - strategistShare, amount1InETH, token0Price, token0, token1);
+            //     token0ToReinvest -= amountToSwapInToken;
+            //     token1ToReinvest += amountOutForLowerToken;
+            // } else if (amount1InETH > amount0InETH) {
+            //     (uint256 amountToSwapInToken, uint256 amountOutForLowerToken) =
+            //         _balanceAssets(amount1InETH - strategistShare, amount0InETH, token1Price, token1, token0);
+            //     token0ToReinvest += amountOutForLowerToken;
+            //     token1ToReinvest -= amountToSwapInToken;
+            // }
 
             // Update total assets (excluding strategist fee)
-            _totalAccountedAssets += totalProfitInETH - strategistShare;
+            _totalAccountedAssets += netProfitInETH;
+            uint128 reinvestedLiquidity;
+
+            if (newToken0Balance >= token0ToReinvest) {
+                if (newToken1Balance >= token1ToReinvest) {
+                    // Both tokens have sufficient balance, use normal slippage checks
+                    (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(token0ToReinvest, token1ToReinvest, true, true);
+                } else {
+                    // Token1 is short, remove token0's minimum amount check to allow pool to take less token0
+                    (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(
+                        token0ToReinvest,
+                        newToken1Balance,
+                        false, // token0 min check removed
+                        true // token1 keeps min check since it's the limiting factor
+                    );
+                }
+            } else if (newToken1Balance >= token1ToReinvest) {
+                if (newToken0Balance >= token0ToReinvest) {
+                    // Both tokens have sufficient balance, use normal slippage checks
+                    (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(newToken0Balance, token1ToReinvest, true, true);
+                } else {
+                    // Token0 is short, remove token1's minimum amount check to allow pool to take less token1
+                    (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(
+                        newToken0Balance,
+                        token1ToReinvest,
+                        true, // token0 keeps min check since it's the limiting factor
+                        false // token1 min check removed
+                    );
+                }
+            }
 
             // Reinvest remaining tokens
-            (uint128 reinvestedLiquidity,,) = _addLiquidityToKIMPosition(token0ToReinvest, token1ToReinvest);
+
+            // Update KIM position
+            kimPosition = KIMPosition({
+                tokenId: kimPosition.tokenId,
+                liquidity: kimLiquidity + reinvestedLiquidity,
+                amount0: kimPosition.amount0 + token0ToReinvest,
+                amount1: kimPosition.amount1 + token1ToReinvest
+            });
 
             emit HarvestReinvestReport(
                 amount0,
@@ -470,64 +525,19 @@ contract LiquidMode is
         }
     }
 
-    function performMaintenance() external nonReentrant onlyRole(HARVESTER_ROLE) {
-        // Check balances
-        uint256 wethBalance = WETH.balanceOf(address(this));
-        uint256 token1EthBalance = IERC20(token1).balanceOf(address(this));
-        uint256 token0EthBalance = IERC20(token0).balanceOf(address(this));
-
-        // Convert WETH to wrsETH and ezETH if necessary
-        if (wethBalance > 0) {
-            uint256 halfWETH = wethBalance / 2;
-
-            // Swap WETH for wrsETH
-
-            uint256 token1Received = _swapForToken(halfWETH, address(WETH), token1);
-            token1EthBalance += token1Received;
-
-            // Swap WETH for ezETH
-            uint256 token0Received = _swapForToken(halfWETH, address(WETH), token0);
-            token0EthBalance += token0Received;
-        }
-
-        // Get price feeds
-        (int224 _token0Price,) = readDataFeed(token0EthProxy);
-        uint256 token0Price = uint256(uint224(_token0Price));
-        (int224 _token1Price,) = readDataFeed(token1EthProxy);
-        uint256 token1Price = uint256(uint224(_token1Price));
-
-        // Convert balances to ETH value
-        uint256 token1ValueInETH = (token1EthBalance * token1Price) / 10 ** 18;
-        uint256 token0ValueInETH = (token0EthBalance * token0Price) / 10 ** 18;
-
-        // Balance assets if necessary
-        if (token1ValueInETH > token0ValueInETH) {
-            _balanceAssets(token1ValueInETH, token0ValueInETH, token1Price, token1, token0);
-        } else if (token0ValueInETH > token1ValueInETH) {
-            _balanceAssets(token0ValueInETH, token1ValueInETH, token0Price, token0, token1);
-        }
-
-        // Add liquidity to KIM position
-        uint256 finalToken1Balance = IERC20(token1).balanceOf(address(this));
-        uint256 finalToken0Balance = IERC20(token0).balanceOf(address(this));
-        uint128 reinvestedLiquidity;
-        if (finalToken1Balance > 0 && finalToken0Balance > 0) {
-            (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(finalToken0Balance, finalToken1Balance);
-        }
-        emit MaintenancePerformed(wethBalance, finalToken0Balance, finalToken1Balance, reinvestedLiquidity);
-    }
-
     function _balanceAssets(
-        uint256 higherAmount,
-        uint256 lowerAmount,
-        uint256 higherPrice,
-        address tokenIn,
-        address tokenOut
-    ) internal returns (uint256 amountToSwapInToken, uint256 amountOutForLowerToken) {
-        uint256 difference = higherAmount - lowerAmount;
-        uint256 amountToSwapInETH = difference / 2;
-        amountToSwapInToken = amountToSwapInETH * 10 ** 18 / higherPrice;
-        amountOutForLowerToken = _swapForToken(amountToSwapInToken, tokenIn, tokenOut);
+        uint256 token0ToReInvest,
+        uint256 token1ToReInvest,
+        uint256 currentToken0Amount,
+        uint256 currentToken1Amount
+    ) internal {
+        if (currentToken0Amount > token0ToReInvest) {
+            uint256 amount0ToSwap = currentToken0Amount - token0ToReInvest;
+            _swapForToken(amount0ToSwap, token0, token1);
+        } else if (currentToken0Amount < token0ToReInvest) {
+            uint256 amount1ToSwap = currentToken1Amount - token1ToReInvest;
+            _swapForToken(amount1ToSwap, token1, token0);
+        }
     }
 
     function totalAssets() public view override returns (uint256) {

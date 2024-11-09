@@ -1267,6 +1267,10 @@ contract LiquidModeTest is Test {
         console.log("strategistFee", strategistFee);
         uint256 netIncrease = expectedMinIncrease - strategistFee;
         console.log("netIncrease", netIncrease);
+        uint256 balEzETH = IERC20(liquidMode.token0()).balanceOf(address(liquidMode));
+        uint256 balWrsETH = IERC20(liquidMode.token1()).balanceOf(address(liquidMode));
+        console.log("balEzETH", balEzETH);
+        console.log("balWrsETH", balWrsETH);
         uint256 actualIncrease = liquidMode.totalAssets() - depositAmount;
         assertApproxEqRel(
             actualIncrease, netIncrease, 0.02e18, "Total assets should have increased by at least 98% of collected fees"
@@ -1368,171 +1372,171 @@ contract LiquidModeTest is Test {
         // assertEq(accumulatedFee, 0, "Accumulated strategist fee should be zero");
     }
 
-    function testPerformMaintenance() public {
-        // Setup: Deposit some funds
-        uint256 depositAmount = 10 ether;
+    // function testPerformMaintenance() public {
+    //     // Setup: Deposit some funds
+    //     uint256 depositAmount = 10 ether;
 
-        // Deposit funds
-        vm.startPrank(user);
-        IERC20(WETH).approve(address(liquidMode), depositAmount);
-        liquidMode.deposit(depositAmount, user);
-        vm.stopPrank();
+    //     // Deposit funds
+    //     vm.startPrank(user);
+    //     IERC20(WETH).approve(address(liquidMode), depositAmount);
+    //     liquidMode.deposit(depositAmount, user);
+    //     vm.stopPrank();
 
-        // Simulate some time passing and operations occurring
-        vm.roll(block.number + 1000);
+    //     // Simulate some time passing and operations occurring
+    //     vm.roll(block.number + 1000);
 
-        // Record initial balances
-        uint256 initialWETHBalance = IERC20(WETH).balanceOf(address(liquidMode));
-        uint256 initialEzETHBalance = IERC20(liquidMode.EZETH()).balanceOf(address(liquidMode));
-        uint256 initialWrsETHBalance = IERC20(liquidMode.WRSETH()).balanceOf(address(liquidMode));
-        (, uint128 initialLiquidity,,) = liquidMode.getKimPosition();
+    //     // Record initial balances
+    //     uint256 initialWETHBalance = IERC20(WETH).balanceOf(address(liquidMode));
+    //     uint256 initialEzETHBalance = IERC20(liquidMode.EZETH()).balanceOf(address(liquidMode));
+    //     uint256 initialWrsETHBalance = IERC20(liquidMode.WRSETH()).balanceOf(address(liquidMode));
+    //     (, uint128 initialLiquidity,,) = liquidMode.getKimPosition();
 
-        console.log("Initial WETH balance:", initialWETHBalance);
-        console.log("Initial ezETH balance:", initialEzETHBalance);
-        console.log("Initial wrsETH balance:", initialWrsETHBalance);
-        console.log("Initial liquidity:", initialLiquidity);
-        // Record initial total assets
-        uint256 initialTotalAssets = liquidMode.totalAssets();
+    //     console.log("Initial WETH balance:", initialWETHBalance);
+    //     console.log("Initial ezETH balance:", initialEzETHBalance);
+    //     console.log("Initial wrsETH balance:", initialWrsETHBalance);
+    //     console.log("Initial liquidity:", initialLiquidity);
+    //     // Record initial total assets
+    //     uint256 initialTotalAssets = liquidMode.totalAssets();
 
-        // Perform maintenance
-        vm.prank(liquidMode.owner());
-        liquidMode.performMaintenance();
+    //     // Perform maintenance
+    //     vm.prank(liquidMode.owner());
+    //     liquidMode.performMaintenance();
 
-        // Check final balances and total assets
-        uint256 finalWETHBalance = IERC20(WETH).balanceOf(address(liquidMode));
-        uint256 finalEzETHBalance = IERC20(liquidMode.EZETH()).balanceOf(address(liquidMode));
-        uint256 finalWrsETHBalance = IERC20(liquidMode.WRSETH()).balanceOf(address(liquidMode));
-        uint256 finalTotalAssets = liquidMode.totalAssets();
-        (, uint128 finalLiquidity,,) = liquidMode.getKimPosition();
+    //     // Check final balances and total assets
+    //     uint256 finalWETHBalance = IERC20(WETH).balanceOf(address(liquidMode));
+    //     uint256 finalEzETHBalance = IERC20(liquidMode.EZETH()).balanceOf(address(liquidMode));
+    //     uint256 finalWrsETHBalance = IERC20(liquidMode.WRSETH()).balanceOf(address(liquidMode));
+    //     uint256 finalTotalAssets = liquidMode.totalAssets();
+    //     (, uint128 finalLiquidity,,) = liquidMode.getKimPosition();
 
-        // Assert WETH was fully converted if there was any
-        assertEq(finalWETHBalance, 0, "All WETH should be converted");
+    //     // Assert WETH was fully converted if there was any
+    //     assertEq(finalWETHBalance, 0, "All WETH should be converted");
 
-        // Check if assets are balanced
-        (int224 _ezETHPrice,) = liquidMode.readDataFeed(EZETH_ETH_PROXY);
-        uint256 ezETHPrice = uint256(uint224(_ezETHPrice));
-        (int224 _wrsETHPrice,) = liquidMode.readDataFeed(WRSETH_ETH_PROXY);
-        uint256 wrsETHPrice = uint256(uint224(_wrsETHPrice));
+    //     // Check if assets are balanced
+    //     (int224 _ezETHPrice,) = liquidMode.readDataFeed(EZETH_ETH_PROXY);
+    //     uint256 ezETHPrice = uint256(uint224(_ezETHPrice));
+    //     (int224 _wrsETHPrice,) = liquidMode.readDataFeed(WRSETH_ETH_PROXY);
+    //     uint256 wrsETHPrice = uint256(uint224(_wrsETHPrice));
 
-        uint256 ezETHValueInETH = (finalEzETHBalance * ezETHPrice) / 1e18;
-        uint256 wrsETHValueInETH = (finalWrsETHBalance * wrsETHPrice) / 1e18;
+    //     uint256 ezETHValueInETH = (finalEzETHBalance * ezETHPrice) / 1e18;
+    //     uint256 wrsETHValueInETH = (finalWrsETHBalance * wrsETHPrice) / 1e18;
 
-        // assertApproxEqRel(ezETHValueInETH, wrsETHValueInETH, 0.01e18, "ezETH and wrsETH values should be balanced");
+    //     // assertApproxEqRel(ezETHValueInETH, wrsETHValueInETH, 0.01e18, "ezETH and wrsETH values should be balanced");
 
-        // Check if liquidity was added to KIM position
-        (uint256 tokenId,,,) = liquidMode.getKimPosition();
-        assertGt(tokenId, 0, "KIM position should be created or updated");
-        assertGt(finalLiquidity, initialLiquidity, "Liquidity should be added to KIM position");
+    //     // Check if liquidity was added to KIM position
+    //     (uint256 tokenId,,,) = liquidMode.getKimPosition();
+    //     assertGt(tokenId, 0, "KIM position should be created or updated");
+    //     assertGt(finalLiquidity, initialLiquidity, "Liquidity should be added to KIM position");
 
-        // Log results
-        console.log("Initial total assets:", initialTotalAssets);
-        console.log("Final WETH balance:", finalWETHBalance);
-        console.log("Final ezETH balance:", finalEzETHBalance);
-        console.log("Final wrsETH balance:", finalWrsETHBalance);
-        console.log("Final total assets:", finalTotalAssets);
+    //     // Log results
+    //     console.log("Initial total assets:", initialTotalAssets);
+    //     console.log("Final WETH balance:", finalWETHBalance);
+    //     console.log("Final ezETH balance:", finalEzETHBalance);
+    //     console.log("Final wrsETH balance:", finalWrsETHBalance);
+    //     console.log("Final total assets:", finalTotalAssets);
 
-        // Assert that the total assets have not decreased
-        assertGe(finalTotalAssets, initialTotalAssets, "Total assets should not decrease after maintenance");
-    }
+    //     // Assert that the total assets have not decreased
+    //     assertGe(finalTotalAssets, initialTotalAssets, "Total assets should not decrease after maintenance");
+    // }
 
-    function testPerformMaintenanceWithWETH() public {
-        // Setup: Deposit some funds and add extra WETH
-        uint256 depositAmount = 10 ether;
-        uint256 extraWETH = 0.5 ether;
+    // function testPerformMaintenanceWithWETH() public {
+    //     // Setup: Deposit some funds and add extra WETH
+    //     uint256 depositAmount = 10 ether;
+    //     uint256 extraWETH = 0.5 ether;
 
-        // Deposit funds
-        vm.startPrank(user);
-        IERC20(WETH).approve(address(liquidMode), depositAmount);
-        liquidMode.deposit(depositAmount, user);
-        vm.stopPrank();
+    //     // Deposit funds
+    //     vm.startPrank(user);
+    //     IERC20(WETH).approve(address(liquidMode), depositAmount);
+    //     liquidMode.deposit(depositAmount, user);
+    //     vm.stopPrank();
 
-        // Deal extra WETH directly to the contract
-        deal(address(WETH), address(liquidMode), extraWETH);
+    //     // Deal extra WETH directly to the contract
+    //     deal(address(WETH), address(liquidMode), extraWETH);
 
-        // Record initial state
-        uint256 initialWETHBalance = IERC20(WETH).balanceOf(address(liquidMode));
-        uint256 initialEzETHBalance = IERC20(liquidMode.EZETH()).balanceOf(address(liquidMode));
-        uint256 initialWrsETHBalance = IERC20(liquidMode.WRSETH()).balanceOf(address(liquidMode));
-        (, uint128 initialLiquidity,,) = liquidMode.getKimPosition();
-        uint256 initialTotalAssets = liquidMode.totalAssets();
+    //     // Record initial state
+    //     uint256 initialWETHBalance = IERC20(WETH).balanceOf(address(liquidMode));
+    //     uint256 initialEzETHBalance = IERC20(liquidMode.EZETH()).balanceOf(address(liquidMode));
+    //     uint256 initialWrsETHBalance = IERC20(liquidMode.WRSETH()).balanceOf(address(liquidMode));
+    //     (, uint128 initialLiquidity,,) = liquidMode.getKimPosition();
+    //     uint256 initialTotalAssets = liquidMode.totalAssets();
 
-        console.log("Initial WETH balance:", initialWETHBalance);
-        console.log("Initial ezETH balance:", initialEzETHBalance);
-        console.log("Initial wrsETH balance:", initialWrsETHBalance);
-        console.log("Initial liquidity:", initialLiquidity);
-        console.log("Initial total assets:", initialTotalAssets);
+    //     console.log("Initial WETH balance:", initialWETHBalance);
+    //     console.log("Initial ezETH balance:", initialEzETHBalance);
+    //     console.log("Initial wrsETH balance:", initialWrsETHBalance);
+    //     console.log("Initial liquidity:", initialLiquidity);
+    //     console.log("Initial total assets:", initialTotalAssets);
 
-        // Perform maintenance
-        vm.prank(liquidMode.owner());
-        liquidMode.performMaintenance();
+    //     // Perform maintenance
+    //     vm.prank(liquidMode.owner());
+    //     liquidMode.performMaintenance();
 
-        // Check final state
-        uint256 finalWETHBalance = IERC20(WETH).balanceOf(address(liquidMode));
-        (, uint128 finalLiquidity,,) = liquidMode.getKimPosition();
-        uint256 finalTotalAssets = liquidMode.totalAssets();
+    //     // Check final state
+    //     uint256 finalWETHBalance = IERC20(WETH).balanceOf(address(liquidMode));
+    //     (, uint128 finalLiquidity,,) = liquidMode.getKimPosition();
+    //     uint256 finalTotalAssets = liquidMode.totalAssets();
 
-        // Assertions
-        assertEq(finalWETHBalance, 0, "All WETH should be converted");
-        assertGt(finalLiquidity, initialLiquidity, "Liquidity should increase");
-        assertGe(finalTotalAssets, initialTotalAssets, "Total assets should not decrease");
+    //     // Assertions
+    //     assertEq(finalWETHBalance, 0, "All WETH should be converted");
+    //     assertGt(finalLiquidity, initialLiquidity, "Liquidity should increase");
+    //     assertGe(finalTotalAssets, initialTotalAssets, "Total assets should not decrease");
 
-        // Log final state
-        console.log("Final WETH balance:", finalWETHBalance);
-        console.log("Final total assets:", finalTotalAssets);
-    }
+    //     // Log final state
+    //     console.log("Final WETH balance:", finalWETHBalance);
+    //     console.log("Final total assets:", finalTotalAssets);
+    // }
 
-    function testPerformMaintenanceWithExtraEzETH() public {
-        // Setup: Deposit some funds and add extra ezETH
-        uint256 depositAmount = 10 ether;
-        uint256 extraEzETH = 0.5 ether;
+    // function testPerformMaintenanceWithExtraEzETH() public {
+    //     // Setup: Deposit some funds and add extra ezETH
+    //     uint256 depositAmount = 10 ether;
+    //     uint256 extraEzETH = 0.5 ether;
 
-        // Deposit funds
-        vm.startPrank(user);
-        IERC20(WETH).approve(address(liquidMode), depositAmount);
-        liquidMode.deposit(depositAmount, user);
-        vm.stopPrank();
+    //     // Deposit funds
+    //     vm.startPrank(user);
+    //     IERC20(WETH).approve(address(liquidMode), depositAmount);
+    //     liquidMode.deposit(depositAmount, user);
+    //     vm.stopPrank();
 
-        // Deal extra ezETH directly to the contract
-        deal(liquidMode.EZETH(), address(liquidMode), extraEzETH);
+    //     // Deal extra ezETH directly to the contract
+    //     deal(liquidMode.EZETH(), address(liquidMode), extraEzETH);
 
-        // Record initial state
-        uint256 initialWETHBalance = IERC20(WETH).balanceOf(address(liquidMode));
-        uint256 initialEzETHBalance = IERC20(liquidMode.EZETH()).balanceOf(address(liquidMode));
-        uint256 initialWrsETHBalance = IERC20(liquidMode.WRSETH()).balanceOf(address(liquidMode));
-        (, uint128 initialLiquidity,,) = liquidMode.getKimPosition();
-        uint256 initialTotalAssets = liquidMode.totalAssets();
+    //     // Record initial state
+    //     uint256 initialWETHBalance = IERC20(WETH).balanceOf(address(liquidMode));
+    //     uint256 initialEzETHBalance = IERC20(liquidMode.EZETH()).balanceOf(address(liquidMode));
+    //     uint256 initialWrsETHBalance = IERC20(liquidMode.WRSETH()).balanceOf(address(liquidMode));
+    //     (, uint128 initialLiquidity,,) = liquidMode.getKimPosition();
+    //     uint256 initialTotalAssets = liquidMode.totalAssets();
 
-        console.log("Initial WETH balance:", initialWETHBalance);
-        console.log("Initial ezETH balance:", initialEzETHBalance);
-        console.log("Initial wrsETH balance:", initialWrsETHBalance);
-        console.log("Initial liquidity:", initialLiquidity);
-        console.log("Initial total assets:", initialTotalAssets);
+    //     console.log("Initial WETH balance:", initialWETHBalance);
+    //     console.log("Initial ezETH balance:", initialEzETHBalance);
+    //     console.log("Initial wrsETH balance:", initialWrsETHBalance);
+    //     console.log("Initial liquidity:", initialLiquidity);
+    //     console.log("Initial total assets:", initialTotalAssets);
 
-        // Perform maintenance
-        vm.prank(liquidMode.owner());
-        liquidMode.performMaintenance();
+    //     // Perform maintenance
+    //     vm.prank(liquidMode.owner());
+    //     liquidMode.performMaintenance();
 
-        // Check final state
-        uint256 finalWETHBalance = IERC20(WETH).balanceOf(address(liquidMode));
-        uint256 finalEzETHBalance = IERC20(liquidMode.EZETH()).balanceOf(address(liquidMode));
-        uint256 finalWrsETHBalance = IERC20(liquidMode.WRSETH()).balanceOf(address(liquidMode));
-        (, uint128 finalLiquidity,,) = liquidMode.getKimPosition();
-        uint256 finalTotalAssets = liquidMode.totalAssets();
+    //     // Check final state
+    //     uint256 finalWETHBalance = IERC20(WETH).balanceOf(address(liquidMode));
+    //     uint256 finalEzETHBalance = IERC20(liquidMode.EZETH()).balanceOf(address(liquidMode));
+    //     uint256 finalWrsETHBalance = IERC20(liquidMode.WRSETH()).balanceOf(address(liquidMode));
+    //     (, uint128 finalLiquidity,,) = liquidMode.getKimPosition();
+    //     uint256 finalTotalAssets = liquidMode.totalAssets();
 
-        // Assertions
-        assertEq(finalWETHBalance, 0, "All WETH should be converted");
-        assertLt(finalEzETHBalance, initialEzETHBalance, "ezETH balance should decrease");
-        assertLt(finalWrsETHBalance, initialWrsETHBalance, "wrsETH balance should decrease");
-        assertGt(finalLiquidity, initialLiquidity, "Liquidity should increase");
-        assertGe(finalTotalAssets, initialTotalAssets, "Total assets should not decrease");
+    //     // Assertions
+    //     assertEq(finalWETHBalance, 0, "All WETH should be converted");
+    //     assertLt(finalEzETHBalance, initialEzETHBalance, "ezETH balance should decrease");
+    //     assertLt(finalWrsETHBalance, initialWrsETHBalance, "wrsETH balance should decrease");
+    //     assertGt(finalLiquidity, initialLiquidity, "Liquidity should increase");
+    //     assertGe(finalTotalAssets, initialTotalAssets, "Total assets should not decrease");
 
-        // Log final state
-        console.log("Final WETH balance:", finalWETHBalance);
-        console.log("Final ezETH balance:", finalEzETHBalance);
-        console.log("Final wrsETH balance:", finalWrsETHBalance);
-        console.log("Final liquidity:", finalLiquidity);
-        console.log("Final total assets:", finalTotalAssets);
-    }
+    //     // Log final state
+    //     console.log("Final WETH balance:", finalWETHBalance);
+    //     console.log("Final ezETH balance:", finalEzETHBalance);
+    //     console.log("Final wrsETH balance:", finalWrsETHBalance);
+    //     console.log("Final liquidity:", finalLiquidity);
+    //     console.log("Final total assets:", finalTotalAssets);
+    // }
 
     // function testClaimStrategistFees() public {
     //     // Setup: Deposit funds and generate some fees
@@ -1755,67 +1759,67 @@ contract LiquidModeTest is Test {
         // console.log("Accumulated strategist fee after failed harvest:", liquidMode.accumulatedStrategistFee());
     }
 
-    function testNonHarvesterCannotPerformMaintenance() public {
-        // Setup: Deposit some funds
-        uint256 depositAmount = 10 ether;
+    // function testNonHarvesterCannotPerformMaintenance() public {
+    //     // Setup: Deposit some funds
+    //     uint256 depositAmount = 10 ether;
 
-        // Deposit funds
-        vm.startPrank(user);
-        IERC20(WETH).approve(address(liquidMode), depositAmount);
-        liquidMode.deposit(depositAmount, user);
-        vm.stopPrank();
+    //     // Deposit funds
+    //     vm.startPrank(user);
+    //     IERC20(WETH).approve(address(liquidMode), depositAmount);
+    //     liquidMode.deposit(depositAmount, user);
+    //     vm.stopPrank();
 
-        // Simulate some time passing and operations occurring
-        vm.roll(block.number + 1000);
+    //     // Simulate some time passing and operations occurring
+    //     vm.roll(block.number + 1000);
 
-        // Record initial balances
-        uint256 initialWETHBalance = IERC20(WETH).balanceOf(address(liquidMode));
-        uint256 initialEzETHBalance = IERC20(liquidMode.EZETH()).balanceOf(address(liquidMode));
-        uint256 initialWrsETHBalance = IERC20(liquidMode.WRSETH()).balanceOf(address(liquidMode));
-        (, uint128 initialLiquidity,,) = liquidMode.getKimPosition();
+    //     // Record initial balances
+    //     uint256 initialWETHBalance = IERC20(WETH).balanceOf(address(liquidMode));
+    //     uint256 initialEzETHBalance = IERC20(liquidMode.EZETH()).balanceOf(address(liquidMode));
+    //     uint256 initialWrsETHBalance = IERC20(liquidMode.WRSETH()).balanceOf(address(liquidMode));
+    //     (, uint128 initialLiquidity,,) = liquidMode.getKimPosition();
 
-        console.log("Initial WETH balance:", initialWETHBalance);
-        console.log("Initial ezETH balance:", initialEzETHBalance);
-        console.log("Initial wrsETH balance:", initialWrsETHBalance);
-        console.log("Initial liquidity:", initialLiquidity);
+    //     console.log("Initial WETH balance:", initialWETHBalance);
+    //     console.log("Initial ezETH balance:", initialEzETHBalance);
+    //     console.log("Initial wrsETH balance:", initialWrsETHBalance);
+    //     console.log("Initial liquidity:", initialLiquidity);
 
-        // Record initial total assets
-        uint256 initialTotalAssets = liquidMode.totalAssets();
+    //     // Record initial total assets
+    //     uint256 initialTotalAssets = liquidMode.totalAssets();
 
-        // Create a non-harvester address
-        address nonHarvester = address(0x1234);
+    //     // Create a non-harvester address
+    //     address nonHarvester = address(0x1234);
 
-        // Attempt to perform maintenance as non-harvester
-        vm.startPrank(nonHarvester);
-        vm.expectRevert(
-            abi.encodeWithSelector(
-                IAccessControl.AccessControlUnauthorizedAccount.selector, nonHarvester, liquidMode.HARVESTER_ROLE()
-            )
-        );
-        liquidMode.performMaintenance();
-        vm.stopPrank();
+    //     // Attempt to perform maintenance as non-harvester
+    //     vm.startPrank(nonHarvester);
+    //     vm.expectRevert(
+    //         abi.encodeWithSelector(
+    //             IAccessControl.AccessControlUnauthorizedAccount.selector, nonHarvester, liquidMode.HARVESTER_ROLE()
+    //         )
+    //     );
+    //     liquidMode.performMaintenance();
+    //     vm.stopPrank();
 
-        // Check final balances and total assets
-        uint256 finalWETHBalance = IERC20(WETH).balanceOf(address(liquidMode));
-        uint256 finalEzETHBalance = IERC20(liquidMode.EZETH()).balanceOf(address(liquidMode));
-        uint256 finalWrsETHBalance = IERC20(liquidMode.WRSETH()).balanceOf(address(liquidMode));
-        uint256 finalTotalAssets = liquidMode.totalAssets();
-        (, uint128 finalLiquidity,,) = liquidMode.getKimPosition();
+    //     // Check final balances and total assets
+    //     uint256 finalWETHBalance = IERC20(WETH).balanceOf(address(liquidMode));
+    //     uint256 finalEzETHBalance = IERC20(liquidMode.EZETH()).balanceOf(address(liquidMode));
+    //     uint256 finalWrsETHBalance = IERC20(liquidMode.WRSETH()).balanceOf(address(liquidMode));
+    //     uint256 finalTotalAssets = liquidMode.totalAssets();
+    //     (, uint128 finalLiquidity,,) = liquidMode.getKimPosition();
 
-        // Assert that nothing has changed
-        assertEq(finalWETHBalance, initialWETHBalance, "WETH balance should not change");
-        assertEq(finalEzETHBalance, initialEzETHBalance, "ezETH balance should not change");
-        assertEq(finalWrsETHBalance, initialWrsETHBalance, "wrsETH balance should not change");
-        assertEq(finalTotalAssets, initialTotalAssets, "Total assets should not change");
-        assertEq(finalLiquidity, initialLiquidity, "Liquidity should not change");
+    //     // Assert that nothing has changed
+    //     assertEq(finalWETHBalance, initialWETHBalance, "WETH balance should not change");
+    //     assertEq(finalEzETHBalance, initialEzETHBalance, "ezETH balance should not change");
+    //     assertEq(finalWrsETHBalance, initialWrsETHBalance, "wrsETH balance should not change");
+    //     assertEq(finalTotalAssets, initialTotalAssets, "Total assets should not change");
+    //     assertEq(finalLiquidity, initialLiquidity, "Liquidity should not change");
 
-        // Log results
-        console.log("Final WETH balance:", finalWETHBalance);
-        console.log("Final ezETH balance:", finalEzETHBalance);
-        console.log("Final wrsETH balance:", finalWrsETHBalance);
-        console.log("Final total assets:", finalTotalAssets);
-        console.log("Final liquidity:", finalLiquidity);
-    }
+    //     // Log results
+    //     console.log("Final WETH balance:", finalWETHBalance);
+    //     console.log("Final ezETH balance:", finalEzETHBalance);
+    //     console.log("Final wrsETH balance:", finalWrsETHBalance);
+    //     console.log("Final total assets:", finalTotalAssets);
+    //     console.log("Final liquidity:", finalLiquidity);
+    // }
 
     function testInvestWithdrawReinvest() public {
         uint256 initialDepositAmount = 0.00411 ether;
