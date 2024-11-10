@@ -1891,4 +1891,84 @@ contract LiquidModeTest is Test {
         console.log("Final Contract WRSETH Balance", finalContractWRSETHBalance);
         console.log("Final Contract EZETH Balance", finalContractEZETHBalance);
     }
+
+    function testFullWithdrawAfterHarvest() public {
+        uint256 depositAmount = 10 ether;
+        uint256 feeAmount0 = 0; // No fees
+        uint256 feeAmount1 = 0; // No fees
+
+        // Setup: Deposit funds
+        vm.startPrank(user);
+        IERC20(WETH).approve(address(liquidMode), depositAmount);
+        uint256 sharesReceived = liquidMode.deposit(depositAmount, user);
+        vm.stopPrank();
+
+        console.log("Initial shares received:", sharesReceived);
+        console.log("Initial total assets:", liquidMode.totalAssets());
+        console.log("Initial user WETH balance:", IERC20(WETH).balanceOf(user));
+
+        // Mock the collect function with zero fees
+        vm.mockCall(
+            address(liquidMode.poolAddress()),
+            abi.encodeWithSelector(IAlgebraPoolActions.collect.selector),
+            abi.encode(feeAmount0, feeAmount1)
+        );
+
+        // Call harvestReinvestAndReport (this should just rebalance positions)
+        vm.prank(liquidMode.owner());
+        liquidMode.harvestReinvestAndReport();
+
+        // Log intermediate state
+        console.log("After harvest total assets:", liquidMode.totalAssets());
+        uint256 balEzETH = IERC20(liquidMode.token0()).balanceOf(address(liquidMode));
+        uint256 balWrsETH = IERC20(liquidMode.token1()).balanceOf(address(liquidMode));
+        console.log("After harvest EZETH balance:", balEzETH);
+        console.log("After harvest WRSETH balance:", balWrsETH);
+
+        // Attempt full withdrawal
+        vm.startPrank(user);
+        uint256 withdrawnAmount = liquidMode.redeem(sharesReceived, user, user);
+        vm.stopPrank();
+
+        uint256 finalUserWETHBalance = IERC20(WETH).balanceOf(user);
+        uint256 actualWithdrawnAmount = finalUserWETHBalance - (1000 ether - depositAmount);
+
+        console.log("Assets redeemed:", sharesReceived);
+        console.log("Actual withdrawn amount:", actualWithdrawnAmount);
+        console.log("Final total assets:", liquidMode.totalAssets());
+        console.log("Final user shares:", liquidMode.balanceOf(user));
+
+        // Check remaining balances in the contract
+        uint256 finalContractWRSETHBalance = IERC20(WRSETH).balanceOf(address(liquidMode));
+        uint256 finalContractEZETHBalance = IERC20(EZETH).balanceOf(address(liquidMode));
+        console.log("Final Contract WRSETH Balance:", finalContractWRSETHBalance);
+        console.log("Final Contract EZETH Balance:", finalContractEZETHBalance);
+
+        // Calculate variance
+        uint256 variancePercentage = actualWithdrawnAmount >= depositAmount
+            ? ((actualWithdrawnAmount - depositAmount) * 10000) / depositAmount
+            : ((depositAmount - actualWithdrawnAmount) * 10000) / depositAmount;
+        console.log("Full withdrawal variance:", variancePercentage, "basis points");
+
+        // Assert that the withdrawal amount is within 1.7% of deposit
+        assertApproxEqAbs(
+            actualWithdrawnAmount,
+            depositAmount,
+            (depositAmount * 17) / 1000, // 1.7% tolerance
+            "User should receive approximately the full deposited amount of WETH (within 1.7%)"
+        );
+
+        // Assert that the contract balances are within acceptable limits (0.1% of deposit)
+        uint256 acceptableVariance = depositAmount / 1000; // 0.1% of deposit
+        assertLe(
+            finalContractWRSETHBalance,
+            acceptableVariance,
+            "Contract should have less than 0.1% of deposit remaining as WRSETH"
+        );
+        assertLe(
+            finalContractEZETHBalance,
+            acceptableVariance,
+            "Contract should have less than 0.1% of deposit remaining as EZETH"
+        );
+    }
 }

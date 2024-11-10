@@ -167,6 +167,8 @@ contract LiquidMode is
 
         uint256 receivedToken0 = _swapForToken(amount0, address(WETH), token0);
         uint256 receivedToken1 = _swapForToken(amount1, address(WETH), token1);
+        console.log("receivedToken0", receivedToken0);
+        console.log("receivedToken1", receivedToken1);
         if (kimPosition.tokenId == 0) {
             _createKIMPosition(receivedToken0, receivedToken1);
         } else {
@@ -265,7 +267,6 @@ contract LiquidMode is
         console.log("decreased liquidity", _liquidity);
         // Update the total liquidity
         require(kimLiquidity >= _liquidity, "Insufficient liquidity");
-        console.log("new liquidity", kimLiquidity);
         console.log("removed liquidity", _liquidity);
         kimLiquidity -= _liquidity;
         console.log("new liquidity", kimLiquidity);
@@ -399,11 +400,14 @@ contract LiquidMode is
         // Get optimal token amounts for this liquidity
         (amount0, amount1) =
             LiquidityAmounts.getAmountsForLiquidity(sqrtPriceX96, sqrtPriceLowerX96, sqrtPriceUpperX96, liquidity);
+        console.log("Invested Amount", amount);
         console.log("amount0", amount0);
         console.log("amount1", amount1);
         //convert amount in terms of WETH
         amount0 = amount0 * token0Price / 1e18;
         amount1 = amount1 * token1Price / 1e18;
+        console.log("amount0InETH", amount0);
+        console.log("amount1InETH", amount1);
     }
 
     function harvestReinvestAndReport() external nonReentrant onlyRole(HARVESTER_ROLE) {
