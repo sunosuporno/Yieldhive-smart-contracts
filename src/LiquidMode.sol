@@ -347,12 +347,14 @@ contract LiquidMode is
             // If WETH is the input token, use the price feed of the output token
             (int224 _tokenOutPrice,) = readDataFeed(tokenOut == token0 ? token0EthProxy : token1EthProxy);
             uint256 tokenOutPrice = uint256(uint224(_tokenOutPrice));
-            uint256 expectedAmountOut = ((amountIn * 1e18) / tokenOutPrice) / 1e18;
+            uint256 expectedAmountOut = ((amountIn * 1e18) / tokenOutPrice);
+            console.log("expectedAmountOut", expectedAmountOut);
             amountOutMinimum = (expectedAmountOut * (10000 - swapSlippageTolerance)) / 10000;
         } else if (tokenOut == address(WETH)) {
             (int224 _tokenInPrice,) = readDataFeed(tokenIn == token1 ? token1EthProxy : token0EthProxy);
             uint256 tokenInPrice = uint256(uint224(_tokenInPrice));
             uint256 expectedAmountOut = (amountIn * tokenInPrice) / 1e18;
+            console.log("expectedAmountOutInETH", expectedAmountOut);
             amountOutMinimum = (expectedAmountOut * (10000 - swapSlippageTolerance)) / 10000;
         } else {
             // Original logic for non-WETH input tokens
