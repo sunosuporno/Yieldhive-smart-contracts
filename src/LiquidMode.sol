@@ -246,7 +246,7 @@ contract LiquidMode is
         // Update the struct
         kimPosition = KIMPosition({
             tokenId: kimTokenId,
-            liquidity: kimLiquidity, // Use the updated total liquidity
+            liquidity: kimPosition.liquidity + liquidity, // Use the updated total liquidity
             amount0: kimPosition.amount0 + addedAmount0,
             amount1: kimPosition.amount1 + addedAmount1
         });
@@ -285,7 +285,7 @@ contract LiquidMode is
 
         kimPosition = KIMPosition({
             tokenId: kimPosition.tokenId,
-            liquidity: kimLiquidity,
+            liquidity: kimPosition.liquidity - _liquidity,
             amount0: kimPosition.amount0 > removedAmount0 ? kimPosition.amount0 - removedAmount0 : 0,
             amount1: kimPosition.amount1 > removedAmount1 ? kimPosition.amount1 - removedAmount1 : 0
         });
@@ -337,13 +337,6 @@ contract LiquidMode is
         (uint256 removedAmount0, uint256 removedAmount1, uint128 _liquidity) =
             _removeLiquidityFromKIMPosition(token0Amount, token1Amount);
 
-        // //update kim position
-        // kimPosition = KIMPosition({
-        //     tokenId: kimPosition.tokenId,
-        //     liquidity: kimLiquidity - _liquidity,
-        //     amount0: kimPosition.amount0 - removedAmount0,
-        //     amount1: kimPosition.amount1 - removedAmount1
-        // });
 
         (uint256 receivedAmount0, uint256 receivedAmount1) = _collectKIMFees(removedAmount0, removedAmount1);
         // Swap token0 for WETH
@@ -496,14 +489,17 @@ contract LiquidMode is
             );
         }
         
-        // Update KIM position
-        kimPosition = KIMPosition({
-            tokenId: kimPosition.tokenId,
-            liquidity: kimLiquidity + reinvestedLiquidity,
-            amount0: kimPosition.amount0 + token0ToReinvest,
-            amount1: kimPosition.amount1 + token1ToReinvest
-        });
+        // console.log("reinvestedLiquidity", reinvestedLiquidity);
+        // console.log("kimPosition.liquidity", kimPosition.liquidity);
+        // // Update KIM position
+        // kimPosition = KIMPosition({
+        //     tokenId: kimPosition.tokenId,
+        //     liquidity: kimPosition.liquidity + reinvestedLiquidity,
+        //     amount0: kimPosition.amount0 + token0ToReinvest,
+        //     amount1: kimPosition.amount1 + token1ToReinvest
+        // });
         
+        // console.log("new kimPosition.liquidity", kimPosition.liquidity);
         emit HarvestReinvestReport(
             amount0,
             amount1,
