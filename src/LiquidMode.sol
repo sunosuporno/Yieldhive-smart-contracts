@@ -169,6 +169,14 @@ contract LiquidMode is
         uint256 receivedToken1 = _swapForToken(amount1, address(WETH), token1);
         console.log("receivedToken0", receivedToken0);
         console.log("receivedToken1", receivedToken1);
+        uint256 wethBalance = IERC20(WETH).balanceOf(address(this));
+        if(wethBalance > 0) {
+            uint256 receivedToken0Dust = _swapForToken(wethBalance/2, address(WETH), token0);
+            receivedToken0 += receivedToken0Dust;
+            uint256 receivedToken1Dust = _swapForToken(wethBalance/2, address(WETH), token1);
+            receivedToken1 += receivedToken1Dust;
+        }
+
         if (kimPosition.tokenId == 0) {
             _createKIMPosition(receivedToken0, receivedToken1);
         } else {
@@ -387,8 +395,12 @@ contract LiquidMode is
         (int224 _token1Price,) = readDataFeed(token1EthProxy);
         uint256 token1Price = uint256(uint224(_token1Price));
 
+        console.log("amount in ETH to be invested", amount);
+
         // amount in ezETH terms
         uint256 ezETHAmount = amount * 1e18 / token0Price;
+
+        console.log("amount converted to ezETH", ezETHAmount);
 
         uint160 sqrtPriceX96 = PoolInteraction._getSqrtPrice(IAlgebraPool(poolAddress));
         uint160 sqrtPriceLowerX96 = TickMath.getSqrtRatioAtTick(BOTTOM_TICK);
@@ -411,124 +423,90 @@ contract LiquidMode is
     }
 
     function harvestReinvestAndReport() external nonReentrant onlyRole(HARVESTER_ROLE) {
+        // Collect any available fees first
         (uint256 amount0, uint256 amount1) = _collectKIMFees(0, 0);
-        if (amount0 > 0 || amount1 > 0) {
-            // Convert amounts to ETH value for fee calculation
-            (int224 _token0Price,) = readDataFeed(token0EthProxy);
-            uint256 token0Price = uint256(uint224(_token0Price));
-            (int224 _token1Price,) = readDataFeed(token1EthProxy);
-            uint256 token1Price = uint256(uint224(_token1Price));
+        
+        // Get price feeds for calculations
+        (int224 _token0Price,) = readDataFeed(token0EthProxy);
+        uint256 token0Price = uint256(uint224(_token0Price));
+        (int224 _token1Price,) = readDataFeed(token1EthProxy);
+        uint256 token1Price = uint256(uint224(_token1Price));
 
+        // Handle fee distribution if any fees were collected
+        uint256 strategistShare = 0;
+        if (amount0 > 0 || amount1 > 0) {
             uint256 amount0InETH = amount0 > 0 ? (amount0 * token0Price) / 10 ** 18 : 0;
             uint256 amount1InETH = amount1 > 0 ? (amount1 * token1Price) / 10 ** 18 : 0;
-
-            // Calculate strategist's share
             uint256 totalProfitInETH = amount0InETH + amount1InETH;
-            uint256 strategistShare = (totalProfitInETH * strategistFeePercentage) / 10000;
-            uint256 netProfitInETH = totalProfitInETH - strategistShare;
-
-            // Calculate token amounts for strategist
+            strategistShare = (totalProfitInETH * strategistFeePercentage) / 10000;
+            
+            // Calculate and transfer strategist's share
             uint256 strategistAmount0 = (amount0 * strategistFeePercentage) / 10000;
             uint256 strategistAmount1 = (amount1 * strategistFeePercentage) / 10000;
-
-            // Transfer strategist's share directly
             if (strategistAmount0 > 0) IERC20(token0).transfer(strategist, strategistAmount0);
             if (strategistAmount1 > 0) IERC20(token1).transfer(strategist, strategistAmount1);
+            
+            _totalAccountedAssets += (totalProfitInETH - strategistShare);
+        }
 
-            uint256 remainingToken0 = IERC20(token0).balanceOf(address(this));
-            uint256 remainingToken1 = IERC20(token1).balanceOf(address(this));
-
-            uint256 remainingToken0InETH = remainingToken0 * token0Price / 1e18;
-            uint256 remainingToken1InETH = remainingToken1 * token1Price / 1e18;
-
-            console.log("remainingToken0InETH", remainingToken0InETH);
-            console.log("remainingToken1InETH", remainingToken1InETH);
-
-            (uint256 token0ToReinvestInETH, uint256 token1ToReinvestInETH) =
-                _calculateOptimalRatio(remainingToken0InETH + remainingToken1InETH);
-
-            uint256 token0ToReinvest = token0ToReinvestInETH * 1e18 / token0Price;
-            uint256 token1ToReinvest = token1ToReinvestInETH * 1e18 / token1Price;
-
-            console.log("token0ToReinvest", token0ToReinvest);
-            console.log("token1ToReinvest", token1ToReinvest);
-
-            console.log("remainingToken0", remainingToken0);
-            console.log("remainingToken1", remainingToken1);
-
-            _balanceAssets(token0ToReinvest, token1ToReinvest, remainingToken0, remainingToken1);
-
-            uint256 newToken0Balance = IERC20(token0).balanceOf(address(this));
-            uint256 newToken1Balance = IERC20(token1).balanceOf(address(this));
-
-            console.log("newToken0Balance", newToken0Balance);
-            console.log("newToken1Balance", newToken1Balance);
-
-            // // Balance assets if needed
-            // if (amount0InETH > amount1InETH) {
-            //     (uint256 amountToSwapInToken, uint256 amountOutForLowerToken) =
-            //         _balanceAssets(amount0InETH - strategistShare, amount1InETH, token0Price, token0, token1);
-            //     token0ToReinvest -= amountToSwapInToken;
-            //     token1ToReinvest += amountOutForLowerToken;
-            // } else if (amount1InETH > amount0InETH) {
-            //     (uint256 amountToSwapInToken, uint256 amountOutForLowerToken) =
-            //         _balanceAssets(amount1InETH - strategistShare, amount0InETH, token1Price, token1, token0);
-            //     token0ToReinvest += amountOutForLowerToken;
-            //     token1ToReinvest -= amountToSwapInToken;
-            // }
-
-            // Update total assets (excluding strategist fee)
-            _totalAccountedAssets += netProfitInETH;
-            uint128 reinvestedLiquidity;
-
-            if (newToken0Balance >= token0ToReinvest) {
-                if (newToken1Balance >= token1ToReinvest) {
-                    // Both tokens have sufficient balance, use normal slippage checks
-                    (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(token0ToReinvest, token1ToReinvest, true, true);
-                } else {
-                    // Token1 is short, remove token0's minimum amount check to allow pool to take less token0
-                    (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(
-                        token0ToReinvest,
-                        newToken1Balance,
-                        false, // token0 min check removed
-                        true // token1 keeps min check since it's the limiting factor
-                    );
-                }
-            } else if (newToken1Balance >= token1ToReinvest) {
-                if (newToken0Balance >= token0ToReinvest) {
-                    // Both tokens have sufficient balance, use normal slippage checks
-                    (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(newToken0Balance, token1ToReinvest, true, true);
-                } else {
-                    // Token0 is short, remove token1's minimum amount check to allow pool to take less token1
-                    (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(
-                        newToken0Balance,
-                        token1ToReinvest,
-                        true, // token0 keeps min check since it's the limiting factor
-                        false // token1 min check removed
-                    );
-                }
+        // Perform rebalancing regardless of fee collection
+        uint256 remainingToken0 = IERC20(token0).balanceOf(address(this));
+        uint256 remainingToken1 = IERC20(token1).balanceOf(address(this));
+        
+        uint256 remainingToken0InETH = remainingToken0 * token0Price / 1e18;
+        uint256 remainingToken1InETH = remainingToken1 * token1Price / 1e18;
+        
+        (uint256 token0ToReinvestInETH, uint256 token1ToReinvestInETH) = 
+            _calculateOptimalRatio(remainingToken0InETH + remainingToken1InETH);
+        
+        uint256 token0ToReinvest = token0ToReinvestInETH * 1e18 / token0Price;
+        uint256 token1ToReinvest = token1ToReinvestInETH * 1e18 / token1Price;
+        
+        _balanceAssets(token0ToReinvest, token1ToReinvest, remainingToken0, remainingToken1);
+        
+        uint256 newToken0Balance = IERC20(token0).balanceOf(address(this));
+        uint256 newToken1Balance = IERC20(token1).balanceOf(address(this));
+        
+        uint128 reinvestedLiquidity;
+        
+        // Add liquidity with appropriate slippage checks based on available balances
+        if (newToken0Balance >= token0ToReinvest) {
+            if (newToken1Balance >= token1ToReinvest) {
+                (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(token0ToReinvest, token1ToReinvest, true, true);
+            } else {
+                (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(
+                    token0ToReinvest,
+                    newToken1Balance,
+                    false,
+                    true
+                );
             }
-
-            // Reinvest remaining tokens
-
-            // Update KIM position
-            kimPosition = KIMPosition({
-                tokenId: kimPosition.tokenId,
-                liquidity: kimLiquidity + reinvestedLiquidity,
-                amount0: kimPosition.amount0 + token0ToReinvest,
-                amount1: kimPosition.amount1 + token1ToReinvest
-            });
-
-            emit HarvestReinvestReport(
-                amount0,
-                amount1,
-                token0ToReinvest,
+        } else if (newToken1Balance >= token1ToReinvest) {
+            (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(
+                newToken0Balance,
                 token1ToReinvest,
-                totalProfitInETH,
-                strategistShare,
-                reinvestedLiquidity
+                true,
+                false
             );
         }
+        
+        // Update KIM position
+        kimPosition = KIMPosition({
+            tokenId: kimPosition.tokenId,
+            liquidity: kimLiquidity + reinvestedLiquidity,
+            amount0: kimPosition.amount0 + token0ToReinvest,
+            amount1: kimPosition.amount1 + token1ToReinvest
+        });
+        
+        emit HarvestReinvestReport(
+            amount0,
+            amount1,
+            token0ToReinvest,
+            token1ToReinvest,
+            amount0 > 0 || amount1 > 0 ? amount0 + amount1 : 0,  // totalProfitInETH
+            strategistShare,
+            reinvestedLiquidity
+        );
     }
 
     function _balanceAssets(

@@ -530,8 +530,8 @@ contract LiquidModeTest is Test {
         console.log("Final Contract EZETH Balance", finalContractEZETHBalance);
     }
 
-    function testFullWithdraw() public {
-        uint256 depositAmount = 10 ether;
+    function testFullWithdrawOnly() public {
+        uint256 depositAmount = 1 ether;
 
         // Setup: Deposit funds
         vm.startPrank(user);
@@ -541,6 +541,9 @@ contract LiquidModeTest is Test {
 
         console.log("Initial shares received:", sharesReceived);
         console.log("Initial total assets:", liquidMode.totalAssets());
+        console.log("Initial contract WETH balance", IERC20(WETH).balanceOf(address(liquidMode)));
+        console.log("Initial contract WRSETH balance", IERC20(WRSETH).balanceOf(address(liquidMode)));
+        console.log("Initial contract EZETH balance", IERC20(EZETH).balanceOf(address(liquidMode)));
 
         // Skip 100 blocks to simulate time passing
         vm.roll(block.number + 100);
@@ -1906,6 +1909,11 @@ contract LiquidModeTest is Test {
         console.log("Initial shares received:", sharesReceived);
         console.log("Initial total assets:", liquidMode.totalAssets());
         console.log("Initial user WETH balance:", IERC20(WETH).balanceOf(user));
+        console.log("initial contract WETH balance", IERC20(WETH).balanceOf(address(liquidMode)));
+        console.log("Initial ezETH Balance of contract:", IERC20(liquidMode.token0()).balanceOf(address(liquidMode)));
+        console.log("Initial wrsETH Balance of contract:", IERC20(liquidMode.token1()).balanceOf(address(liquidMode)));
+        (, uint128 initialLiquidity,,) = liquidMode.getKimPosition();
+        console.log("Initial liquidity of contract:", initialLiquidity);
 
         // Mock the collect function with zero fees
         vm.mockCall(
