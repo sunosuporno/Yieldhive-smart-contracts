@@ -258,10 +258,17 @@ contract LiquidMode is
         internal
         returns (uint256 removedAmount0, uint256 removedAmount1, uint128 _liquidity)
     {
-        console.log("running _removeLiquidityFromKIMPosition");
-        console.log("amount0", amount0);
-        console.log("amount1", amount1);
+        // Get current position details
+        (,,,,,,uint128 currentLiquidity,,,,) = nonfungiblePositionManager.positions(kimPosition.tokenId);
+        
+        // Calculate required liquidity
         _liquidity = _getLiquidityForAmounts(amount0, amount1);
+        
+        // Ensure we don't try to remove more than what exists
+        if (_liquidity > currentLiquidity) {
+            _liquidity = currentLiquidity;
+        }
+
         INonfungiblePositionManager.DecreaseLiquidityParams memory params = INonfungiblePositionManager
             .DecreaseLiquidityParams({
             tokenId: kimPosition.tokenId,
@@ -272,21 +279,17 @@ contract LiquidMode is
         });
 
         (removedAmount0, removedAmount1) = nonfungiblePositionManager.decreaseLiquidity(params);
-        console.log("decreased liquidity", _liquidity);
-        // Update the total liquidity
+        
         require(kimLiquidity >= _liquidity, "Insufficient liquidity");
-        console.log("removed liquidity", _liquidity);
         kimLiquidity -= _liquidity;
-        console.log("new liquidity", kimLiquidity);
 
-        // Update the struct
         kimPosition = KIMPosition({
             tokenId: kimPosition.tokenId,
-            liquidity: kimLiquidity, // Use the updated total liquidity
+            liquidity: kimLiquidity,
             amount0: kimPosition.amount0 > removedAmount0 ? kimPosition.amount0 - removedAmount0 : 0,
             amount1: kimPosition.amount1 > removedAmount1 ? kimPosition.amount1 - removedAmount1 : 0
         });
-        console.log("completed _removeLiquidityFromKIMPosition");
+
         return (removedAmount0, removedAmount1, _liquidity);
     }
 
@@ -326,6 +329,9 @@ contract LiquidMode is
 
         uint256 token0Amount = (kimPosition.amount0 * shares) / totalSupply();
         uint256 token1Amount = (kimPosition.amount1 * shares) / totalSupply();
+
+        console.log("token0Amount to withdraw", token0Amount);
+        console.log("token1Amount to withdraw", token1Amount);
 
         // Take out liquidity from KIM position
         (uint256 removedAmount0, uint256 removedAmount1, uint128 _liquidity) =

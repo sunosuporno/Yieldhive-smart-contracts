@@ -1912,8 +1912,11 @@ contract LiquidModeTest is Test {
         console.log("initial contract WETH balance", IERC20(WETH).balanceOf(address(liquidMode)));
         console.log("Initial ezETH Balance of contract:", IERC20(liquidMode.token0()).balanceOf(address(liquidMode)));
         console.log("Initial wrsETH Balance of contract:", IERC20(liquidMode.token1()).balanceOf(address(liquidMode)));
-        (, uint128 initialLiquidity,,) = liquidMode.getKimPosition();
+        (, uint128 initialLiquidity, uint256 initialAmount0, uint256 initialAmount1) =
+            liquidMode.getKimPosition();
         console.log("Initial liquidity of contract:", initialLiquidity);
+        console.log("Initial amount0 of contract:", initialAmount0);
+        console.log("Initial amount1 of contract:", initialAmount1);
 
         // Mock the collect function with zero fees
         vm.mockCall(
@@ -1932,6 +1935,13 @@ contract LiquidModeTest is Test {
         uint256 balWrsETH = IERC20(liquidMode.token1()).balanceOf(address(liquidMode));
         console.log("After harvest EZETH balance:", balEzETH);
         console.log("After harvest WRSETH balance:", balWrsETH);
+        (, uint128 liquidityAfterHarvest, uint256 amount0AfterHarvest, uint256 amount1AfterHarvest) =
+            liquidMode.getKimPosition();
+        console.log("Liquidity after harvest:", liquidityAfterHarvest);
+        console.log("Amount0 after harvest:", amount0AfterHarvest);
+        console.log("Amount1 after harvest:", amount1AfterHarvest);
+
+        vm.clearMockedCalls();
 
         // Attempt full withdrawal
         vm.startPrank(user);
