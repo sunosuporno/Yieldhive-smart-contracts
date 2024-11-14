@@ -1130,8 +1130,7 @@ contract LiquidModeTest is Test {
         console.log("initial contract WETH balance", IERC20(WETH).balanceOf(address(liquidMode)));
         console.log("Initial ezETH Balance of contract:", IERC20(liquidMode.token0()).balanceOf(address(liquidMode)));
         console.log("Initial wrsETH Balance of contract:", IERC20(liquidMode.token1()).balanceOf(address(liquidMode)));
-        (, uint128 initialLiquidity, uint256 initialAmount0, uint256 initialAmount1) =
-            liquidMode.getKimPosition();
+        (, uint128 initialLiquidity, uint256 initialAmount0, uint256 initialAmount1) = liquidMode.getKimPosition();
         console.log("Initial liquidity of contract:", initialLiquidity);
         console.log("Initial amount0 of contract:", initialAmount0);
         console.log("Initial amount1 of contract:", initialAmount1);
@@ -1191,7 +1190,6 @@ contract LiquidModeTest is Test {
         uint256 balStrategistToken1 = IERC20(liquidMode.token1()).balanceOf(address(liquidMode.strategist()));
         console.log("Strategist token0 balance:", balStrategistToken0);
         console.log("Strategist token1 balance:", balStrategistToken1);
-        
 
         vm.roll(block.number + 10);
         vm.clearMockedCalls();
@@ -1252,7 +1250,7 @@ contract LiquidModeTest is Test {
     }
 
     function testHarvestReinvestAndReports() public {
-        uint256 depositAmount = 100 ether;
+        uint256 depositAmount = 10 ether;
         uint256 feeAmount0 = 1 ether; // 1 ezETH in fees
         uint256 feeAmount1 = 1.5 ether; // 1.5 wrsETH in fees
 
@@ -1272,6 +1270,18 @@ contract LiquidModeTest is Test {
         vm.stopPrank();
 
         assertEq(liquidMode.totalAssets(), depositAmount, "Initial deposit should match total assets");
+
+        console.log("bal of WETH of Contract after deposit", IERC20(WETH).balanceOf(address(liquidMode)));
+        console.log(
+            "bal of ezETH of Contract after deposit", IERC20(liquidMode.token0()).balanceOf(address(liquidMode))
+        );
+        console.log(
+            "bal of wrsETH of Contract after deposit", IERC20(liquidMode.token1()).balanceOf(address(liquidMode))
+        );
+        (, uint128 liquidity, uint256 amount0, uint256 amount1) = liquidMode.getKimPosition();
+        console.log("Liquidity of contract after deposit:", liquidity);
+        console.log("amount0 of contract after deposit:", amount0);
+        console.log("amount1 of contract after deposit:", amount1);
 
         // Mock the collect function
         vm.mockCall(
@@ -1314,7 +1324,7 @@ contract LiquidModeTest is Test {
     }
 
     function testHarvestReinvestAndReportOnlyEzETHFees() public {
-        uint256 depositAmount = 100 ether;
+        uint256 depositAmount = 10 ether;
         uint256 feeAmount0 = 1 ether; // 1 ezETH in fees
         uint256 feeAmount1 = 0; // No wrsETH fees
 
@@ -1371,7 +1381,7 @@ contract LiquidModeTest is Test {
     }
 
     function testHarvestReinvestAndReportNoFees() public {
-        uint256 depositAmount = 100 ether;
+        uint256 depositAmount = 10 ether;
         uint256 feeAmount0 = 0; // No ezETH fees
         uint256 feeAmount1 = 0; // No wrsETH fees
 
@@ -1734,7 +1744,7 @@ contract LiquidModeTest is Test {
     // }
 
     function testNonHarvesterCannotHarvest() public {
-        uint256 depositAmount = 100 ether;
+        uint256 depositAmount = 10 ether;
         uint256 feeAmount0 = 1 ether; // 1 ezETH in fees
         uint256 feeAmount1 = 1.5 ether; // 1.5 wrsETH in fees
 
@@ -1763,8 +1773,8 @@ contract LiquidModeTest is Test {
         );
 
         // Transfer the mocked fee amounts to the LiquidMode contract
-        deal(liquidMode.EZETH(), address(liquidMode), feeAmount0);
-        deal(liquidMode.WRSETH(), address(liquidMode), feeAmount1);
+        deal(liquidMode.token0(), address(liquidMode), feeAmount0);
+        deal(liquidMode.token1(), address(liquidMode), feeAmount1);
 
         // Create a non-harvester address
         address nonHarvester = address(0x1234);
@@ -1939,8 +1949,7 @@ contract LiquidModeTest is Test {
         console.log("initial contract WETH balance", IERC20(WETH).balanceOf(address(liquidMode)));
         console.log("Initial ezETH Balance of contract:", IERC20(liquidMode.token0()).balanceOf(address(liquidMode)));
         console.log("Initial wrsETH Balance of contract:", IERC20(liquidMode.token1()).balanceOf(address(liquidMode)));
-        (, uint128 initialLiquidity, uint256 initialAmount0, uint256 initialAmount1) =
-            liquidMode.getKimPosition();
+        (, uint128 initialLiquidity, uint256 initialAmount0, uint256 initialAmount1) = liquidMode.getKimPosition();
         console.log("Initial liquidity of contract:", initialLiquidity);
         console.log("Initial amount0 of contract:", initialAmount0);
         console.log("Initial amount1 of contract:", initialAmount1);
@@ -2017,3 +2026,6 @@ contract LiquidModeTest is Test {
         );
     }
 }
+// check if token0 matches with either of the two tokens
+// check if token
+// check if token1 matches with either of the two tokens
