@@ -175,12 +175,12 @@ contract LiquidMode is
         // rSETHPoolV2.deposit{value: amount / 2}("");
         (uint256 amount0, uint256 amount1) = _calculateOptimalRatio(amount);
 
-        uint256 receivedToken0 = _swapForToken(amount0, address(WETH), token0);
+        uint256 receivedToken0 = token0 == address(WETH) ? amount0 : _swapForToken(amount0, address(WETH), token0);
         uint256 receivedToken1 = _swapForToken(amount1, address(WETH), token1);
         console.log("receivedToken0", receivedToken0);
         console.log("receivedToken1", receivedToken1);
         uint256 wethBalance = IERC20(WETH).balanceOf(address(this));
-        if (wethBalance > 0) {
+        if (wethBalance > 0 && token0 != address(WETH)) {
             uint256 receivedToken0Dust = _swapForToken(wethBalance / 2, address(WETH), token0);
             receivedToken0 += receivedToken0Dust;
             uint256 receivedToken1Dust = _swapForToken(wethBalance / 2, address(WETH), token1);
@@ -351,7 +351,12 @@ contract LiquidMode is
 
         (uint256 receivedAmount0, uint256 receivedAmount1) = _collectKIMFees(removedAmount0, removedAmount1);
         // Swap token0 for WETH
-        uint256 wethForToken0 = _swapForToken(receivedAmount0, token0, address(WETH));
+        uint256 wethForToken0;
+        if (token0 != address(WETH)) {
+            wethForToken0 = _swapForToken(receivedAmount0, token0, address(WETH));
+        } else {
+            wethForToken0 = receivedAmount0;
+        }
         // Swap token1 for WETH
         uint256 wethForToken1 = _swapForToken(receivedAmount1, token1, address(WETH));
 
@@ -680,6 +685,12 @@ contract LiquidMode is
     }
 
     function readDataFeed(address proxy) public view returns (int224 value, uint32 timestamp) {
+        // If proxy is zero address or if we're querying WETH price
+        if (proxy == address(0) || proxy == address(WETH)) {
+            return (int224(1e18), uint32(block.timestamp));
+        }
+
+        // Otherwise read from the price feed
         (value, timestamp) = IProxy(proxy).read();
     }
 
