@@ -829,33 +829,42 @@ contract LiquidMode is
             });
 
             (uint256 amount0, uint256 amount1) = nonfungiblePositionManager.decreaseLiquidity(params);
-            _collectKIMFees(amount0, amount1);
+            _collectKIMFees(0, 0);
             nonfungiblePositionManager.burn(kimPosition.tokenId);
 
             kimPosition = KIMPosition({tokenId: 0, liquidity: 0, amount0: 0, amount1: 0});
         }
 
         // Step 2: Handle token swaps based on token addresses
-        if (token0 == newToken0) {
-            // Only need to swap token1 to newToken1
-            uint256 token1Bal = IERC20(token1).balanceOf(address(this));
-            if (token1Bal > 0) {
-                _swapForToken(token1Bal, token1, newToken1);
+        // First check if newToken0 matches any of our current tokens
+        if (newToken0 == token0 || newToken0 == token1) {
+            if (newToken0 == token0) {
+                // If newToken0 matches token0, swap token1 to newToken1
+                uint256 token1Bal = IERC20(token1).balanceOf(address(this));
+                if (token1Bal > 0) {
+                    _swapForToken(token1Bal, token1, newToken1);
+                }
+            } else {
+                // If newToken0 matches token1, swap token0 to newToken1
+                uint256 token0Bal = IERC20(token0).balanceOf(address(this));
+                if (token0Bal > 0) {
+                    _swapForToken(token0Bal, token0, newToken1);
+                }
             }
-        } else if (token1 == newToken1) {
-            // Only need to swap token0 to newToken0
-            uint256 token0Bal = IERC20(token0).balanceOf(address(this));
-            if (token0Bal > 0) {
-                _swapForToken(token0Bal, token0, newToken0);
-            }
-        } else {
-            // Need to determine optimal swap path when both tokens are different
-            // For example, if moving from ETH/ezETH to ezETH/wrsETH
-            // Better to swap ETH to wrsETH directly rather than ETH->ezETH->wrsETH
-            if (token0 == address(WETH)) {
-                uint256 wethBal = IERC20(WETH).balanceOf(address(this));
-                if (wethBal > 0) {
-                    _swapForToken(wethBal, address(WETH), newToken1);
+        }
+        // Then check if newToken1 matches any of our current tokens
+        else if (newToken1 == token0 || newToken1 == token1) {
+            if (newToken1 == token0) {
+                // If newToken1 matches token0, swap token1 to newToken0
+                uint256 token1Bal = IERC20(token1).balanceOf(address(this));
+                if (token1Bal > 0) {
+                    _swapForToken(token1Bal, token1, newToken0);
+                }
+            } else {
+                // If newToken1 matches token1, swap token0 to newToken0
+                uint256 token0Bal = IERC20(token0).balanceOf(address(this));
+                if (token0Bal > 0) {
+                    _swapForToken(token0Bal, token0, newToken0);
                 }
             }
         }
