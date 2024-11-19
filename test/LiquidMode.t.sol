@@ -24,13 +24,13 @@ contract LiquidModeTest is Test {
     address constant NONFUNGIBLE_POSITION_MANAGER = 0x2e8614625226D26180aDf6530C3b1677d3D7cf10;
     address constant FACTORY = 0xB5F00c2C5f8821155D8ed27E31932CFD9DB3C5D5;
     address constant POOL_DEPLOYER = 0x6414A461B19726410E52488d9D5ff33682701635;
-    address constant EZETH_WRSETH_POOL = 0xCC29E407a272F2CC817DB9fBfF7e6FdA6536Fc0e;
+    address constant EZETH_WRSETH_POOL = 0xD9a06f63E523757973ffd1a4606A1260252636D2;
     address constant SWAP_ROUTER = 0xAc48FcF1049668B285f3dC72483DF5Ae2162f7e8;
     address constant TREASURY = 0x273dFa01f5605b8c41d6CE1146ed0911FDC5ad07;
     address constant EZETH = 0x2416092f143378750bb29b79eD961ab195CcEea5;
-    address constant WRSETH = 0xe7903B1F75C534Dd8159b313d92cDCfbC62cB3Cd;
-    address constant EZETH_ETH_PROXY = 0x3621b06BfFE478eB481adf65bbF139A052Ed7321;
-    address constant WRSETH_ETH_PROXY = 0xc30e51C9EDD92B9eeF45f281c712faaAf59912BA;
+    address constant WRSETH = 0x4200000000000000000000000000000000000006;
+    address constant EZETH_ETH_PROXY = 0x93Aa62C43a5cceb33682a267356117C4edbdc9b9;
+    address constant WRSETH_ETH_PROXY = 0x4200000000000000000000000000000000000006;
     address public user;
     uint256 public constant INITIAL_USER_BALANCE = 1000 ether;
 
@@ -441,7 +441,7 @@ contract LiquidModeTest is Test {
 
     function testDepositUnauthorizedToken() public {
         // Use ezETH as the unauthorized token
-        address unauthorizedToken = EZETH;
+        address unauthorizedToken = 0xDfc7C877a950e49D2610114102175A06C2e3167a; //mode token
 
         // Mint some ezETH to the user
         uint256 depositAmount = 1 ether;
@@ -1079,6 +1079,7 @@ contract LiquidModeTest is Test {
         console.log("Initial user shares:", initialUserShares);
         console.log("Initial total assets:", initialTotalAssets);
         console.log("Attempting to withdraw:", withdrawAmount);
+        console.log("Initial contract WETH balance:", IERC20(WETH).balanceOf(address(liquidMode)));
 
         // Attempt to withdraw
         vm.startPrank(user);
@@ -1500,7 +1501,7 @@ contract LiquidModeTest is Test {
     //     (, uint128 initialLiquidity,,) = liquidMode.getKimPosition();
     //     uint256 initialTotalAssets = liquidMode.totalAssets();
 
-    //     console.log("Initial WETH balance:", initialWETHBalance);
+    //     console.log("Initial WETH balance:", initialWETHBalantestDepositUnauthorizedTokence);
     //     console.log("Initial ezETH balance:", initialEzETHBalance);
     //     console.log("Initial wrsETH balance:", initialWrsETHBalance);
     //     console.log("Initial liquidity:", initialLiquidity);
