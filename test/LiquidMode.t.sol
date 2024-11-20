@@ -34,6 +34,9 @@ contract LiquidModeTest is Test {
     address public user;
     uint256 public constant INITIAL_USER_BALANCE = 1000 ether;
 
+    INonfungiblePositionManager public immutable nonfungiblePositionManager =
+        INonfungiblePositionManager(NONFUNGIBLE_POSITION_MANAGER);
+
     function setUp() public {
         // Deploy the LiquidMode contract
         liquidMode = new LiquidMode(
@@ -2025,6 +2028,115 @@ contract LiquidModeTest is Test {
             acceptableVariance,
             "Contract should have less than 0.1% of deposit remaining as EZETH"
         );
+    }
+
+    function testMigratePool() public {
+        uint256 depositAmount = 10 ether;
+        uint256 feeAmount0 = 1 ether;
+        uint256 feeAmount1 = 1.5 ether;
+
+
+        // Dummy values for migration
+        address newPoolAddress = 0xCC29E407a272F2CC817DB9fBfF7e6FdA6536Fc0e;
+        address newToken0 = 0x2416092f143378750bb29b79eD961ab195CcEea5;
+        address newToken1 = 0xe7903B1F75C534Dd8159b313d92cDCfbC62cB3Cd;
+        address newToken0EthProxy = 0x93Aa62C43a5cceb33682a267356117C4edbdc9b9;
+        address newToken1EthProxy = 0x0787b4fe7f532B4E0f495c24b26c4675053cEdEf;
+
+
+        //depositing funds in the ezETH/wrsETH pool for testing migration
+        address randomLP = address(0x1234);
+        deal(newToken0, randomLP, 100 ether);
+        deal(newToken1, randomLP, 100 ether);
+
+        INonfungiblePositionManager.MintParams memory params = INonfungiblePositionManager.MintParams({
+            token0: newToken0,
+            token1: newToken1,
+            tickLower: -1020,
+            tickUpper: 1020,
+            amount0Desired: 100 ether,
+            amount1Desired: 100 ether,
+            amount0Min: 0,
+            amount1Min: 0,
+            recipient: randomLP,
+            deadline: block.timestamp
+        });
+
+        vm.startPrank(randomLP);
+        IERC20(newToken0).approve(address(liquidMode.nonfungiblePositionManager()), 100 ether);
+        IERC20(newToken1).approve(address(liquidMode.nonfungiblePositionManager()), 100 ether);
+        liquidMode.nonfungiblePositionManager().mint(params);
+        vm.stopPrank();
+
+        // Initial deposit
+        vm.startPrank(user);
+        IERC20(WETH).approve(address(liquidMode), depositAmount);
+        liquidMode.deposit(depositAmount, user);
+        vm.stopPrank();
+
+        // Record initial state
+        address initialToken0 = liquidMode.token0();
+        address initialToken1 = liquidMode.token1();
+        address initialPool = liquidMode.poolAddress();
+        (, uint128 initialLiquidity, uint256 initialAmount0, uint256 initialAmount1) = liquidMode.getKimPosition();
+
+        console.log("Initial token0:", initialToken0);
+        console.log("Initial token1:", initialToken1);
+        console.log("Initial pool:", initialPool);
+        console.log("Initial liquidity:", initialLiquidity);
+        console.log("Initial amount0:", initialAmount0);
+        console.log("Initial amount1:", initialAmount1);
+
+        // Simulate some harvesting with fees
+        vm.mockCall(
+            address(liquidMode.poolAddress()),
+            abi.encodeWithSelector(IAlgebraPoolActions.collect.selector),
+            abi.encode(feeAmount0, feeAmount1)
+        );
+
+        // Transfer the mocked fee amounts
+        deal(liquidMode.token0(), address(liquidMode), feeAmount0);
+        deal(liquidMode.token1(), address(liquidMode), feeAmount1);
+
+        vm.prank(liquidMode.owner());
+        liquidMode.harvestReinvestAndReport();
+
+        // Record post-harvest state
+        (, uint128 postHarvestLiquidity, uint256 postHarvestAmount0, uint256 postHarvestAmount1) =
+            liquidMode.getKimPosition();
+        console.log("Post-harvest liquidity:", postHarvestLiquidity);
+        console.log("Post-harvest amount0:", postHarvestAmount0);
+        console.log("Post-harvest amount1:", postHarvestAmount1);
+
+        vm.clearMockedCalls();
+
+
+        // Execute migration
+        vm.prank(liquidMode.owner());
+        liquidMode.migratePool(
+            LiquidMode.PoolType.EZETH_WRSETH, // dummy value
+            newPoolAddress,
+            newToken0,
+            newToken1,
+            newToken0EthProxy,
+            newToken1EthProxy
+        );
+
+        // Record post-migration state
+        (, uint128 newLiquidity, uint256 newAmount0, uint256 newAmount1) = liquidMode.getKimPosition();
+
+        console.log("New token0:", liquidMode.token0());
+        console.log("New token1:", liquidMode.token1());
+        console.log("New pool address:", liquidMode.poolAddress());
+        console.log("New liquidity:", newLiquidity);
+        console.log("New amount0:", newAmount0);
+        console.log("New amount1:", newAmount1);
+
+        // Basic assertions
+        assertNotEq(liquidMode.poolAddress(), initialPool, "Pool address should change");
+        // assertNotEq(liquidMode.token0(), initialToken0, "Token0 should change");
+        assertNotEq(liquidMode.token1(), initialToken1, "Token1 should change");
+        assertGt(newLiquidity, 0, "New position should have liquidity");
     }
 }
 // check if token0 matches with either of the two tokens

@@ -513,7 +513,7 @@ contract LiquidMode is
         uint256 token1ToReinvest = token1ToReinvestInETH * 1e18 / token1Price;
         console.log("token1ToReinvest", token1ToReinvest);
 
-        _balanceAssets(token0ToReinvest, token1ToReinvest, remainingToken0, remainingToken1);
+        _balanceAssets(token0ToReinvest, token1ToReinvest, remainingToken0, remainingToken1, token0Price, token1Price);
 
         console.log("balancing assets completed");
         uint256 newToken0Balance = IERC20(token0).balanceOf(address(this));
@@ -521,21 +521,23 @@ contract LiquidMode is
         uint256 newToken1Balance = IERC20(token1).balanceOf(address(this));
         console.log("newToken1Balance", newToken1Balance);
 
+
         uint128 reinvestedLiquidity;
+        (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(token0ToReinvest, token1ToReinvest, true, true);
 
         // Add liquidity with appropriate slippage checks based on available balances
-        if (newToken0Balance >= token0ToReinvest) {
-            if (newToken1Balance >= token1ToReinvest) {
-                console.log("running 1");
-                (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(token0ToReinvest, token1ToReinvest, true, true);
-            } else {
-                console.log("running 2");
-                (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(token0ToReinvest, newToken1Balance, false, true);
-            }
-        } else if (newToken1Balance >= token1ToReinvest) {
-            console.log("running 3");
-            (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(newToken0Balance, token1ToReinvest, true, false);
-        }
+        // if (newToken0Balance >= token0ToReinvest) {
+        //     if (newToken1Balance >= token1ToReinvest) {
+        //         console.log("running 1");
+        //         (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(token0ToReinvest, token1ToReinvest, true, true);
+        //     } else {
+        //         console.log("running 2");
+        //         (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(token0ToReinvest, newToken1Balance, false, true);
+        //     }
+        // } else if (newToken1Balance >= token1ToReinvest) {
+        //     console.log("running 3");
+        //     (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(newToken0Balance, token1ToReinvest, true, false);
+        // }
 
         // console.log("reinvestedLiquidity", reinvestedLiquidity);
         // console.log("kimPosition.liquidity", kimPosition.liquidity);
@@ -563,14 +565,36 @@ contract LiquidMode is
         uint256 token0ToReInvest,
         uint256 token1ToReInvest,
         uint256 currentToken0Amount,
-        uint256 currentToken1Amount
+        uint256 currentToken1Amount,
+        uint256 token0Price,
+        uint256 token1Price
     ) internal {
+        console.log("currentToken0Amount", currentToken0Amount);
+        console.log("currentToken1Amount", currentToken1Amount);
+        console.log("token0ToReInvest", token0ToReInvest);
+        console.log("token1ToReInvest", token1ToReInvest);
         if (currentToken0Amount > token0ToReInvest) {
             uint256 amount0ToSwap = currentToken0Amount - token0ToReInvest;
-            _swapForToken(amount0ToSwap, token0, token1);
+            uint amountOut = _swapForToken(amount0ToSwap, token0, token1);
+            uint currentValueToken1 = amountOut + currentToken1Amount;
+            if (currentValueToken1 >= token1ToReInvest) {
+                uint256 surplus = currentValueToken1 - token1ToReInvest;
+                uint256 surplusInETHToSwap = (surplus * token1Price / 1e18) / 2;
+                uint256 surplusToSwap = surplusInETHToSwap * 1e18 / token1Price;
+                _swapForToken(surplusToSwap, token1, token0);
+            }
         } else if (currentToken0Amount < token0ToReInvest) {
+            console.log("running 1");
             uint256 amount1ToSwap = currentToken1Amount - token1ToReInvest;
-            _swapForToken(amount1ToSwap, token1, token0);
+            console.log("amount1ToSwap", amount1ToSwap);
+            uint amountOut = _swapForToken(amount1ToSwap, token1, token0);
+            uint currentValueToken0 = amountOut + currentToken0Amount;
+            if (currentValueToken0 >= token0ToReInvest) {
+                uint256 surplus = currentValueToken0 - token0ToReInvest;
+                uint256 surplusInETHToSwap = (surplus * token0Price / 1e18) / 2;
+                uint256 surplusToSwap = surplusInETHToSwap * 1e18 / token0Price;
+                _swapForToken(surplusToSwap, token0, token1);
+            }
         }
     }
 
@@ -840,15 +864,18 @@ contract LiquidMode is
         if (newToken0 == token0 || newToken0 == token1) {
             if (newToken0 == token0) {
                 // If newToken0 matches token0, swap token1 to newToken1
+                console.log("swapping token1 to newToken1");
                 uint256 token1Bal = IERC20(token1).balanceOf(address(this));
+                console.log("token1Bal", token1Bal);
                 if (token1Bal > 0) {
-                    _swapForToken(token1Bal, token1, newToken1);
+                    _swapForToken(token1Bal, token1, newToken1, address(0), newToken1EthProxy);
                 }
             } else {
                 // If newToken0 matches token1, swap token0 to newToken1
+                console.log("swapping token0 to newToken1");
                 uint256 token0Bal = IERC20(token0).balanceOf(address(this));
                 if (token0Bal > 0) {
-                    _swapForToken(token0Bal, token0, newToken1);
+                    _swapForToken(token0Bal, token0, newToken1, address(0), newToken1EthProxy);
                 }
             }
         }
@@ -856,15 +883,17 @@ contract LiquidMode is
         else if (newToken1 == token0 || newToken1 == token1) {
             if (newToken1 == token0) {
                 // If newToken1 matches token0, swap token1 to newToken0
+                console.log("swapping token1 to newToken0");
                 uint256 token1Bal = IERC20(token1).balanceOf(address(this));
                 if (token1Bal > 0) {
-                    _swapForToken(token1Bal, token1, newToken0);
+                    _swapForToken(token1Bal, token1, newToken0, address(0), newToken0EthProxy);
                 }
             } else {
                 // If newToken1 matches token1, swap token0 to newToken0
+                console.log("swapping token0 to newToken0");
                 uint256 token0Bal = IERC20(token0).balanceOf(address(this));
                 if (token0Bal > 0) {
-                    _swapForToken(token0Bal, token0, newToken0);
+                    _swapForToken(token0Bal, token0, newToken0, address(0), newToken0EthProxy);
                 }
             }
         }
@@ -878,10 +907,38 @@ contract LiquidMode is
         currentPool = newPool;
 
         // Step 4: Create new position
-        uint256 amount0 = IERC20(token0).balanceOf(address(this));
-        uint256 amount1 = IERC20(token1).balanceOf(address(this));
-        _createKIMPosition(amount0, amount1);
+        uint256 currentBalanceToken0 = IERC20(token0).balanceOf(address(this));
+        uint256 currentBalanceToken1 = IERC20(token1).balanceOf(address(this));
+        console.log("currentBalanceToken0", currentBalanceToken0);
+        console.log("currentBalanceToken1", currentBalanceToken1);
 
-        emit PoolMigrated(newPoolAddress, newToken0, newToken1, amount0, amount1);
+        // balance tokens here 
+        (int224 _token0Price,) = readDataFeed(token0EthProxy);
+        uint256 token0Price = uint256(uint224(_token0Price));
+        (int224 _token1Price,) = readDataFeed(token1EthProxy);
+        uint256 token1Price = uint256(uint224(_token1Price));
+
+        uint256 ammount0InEth = (currentBalanceToken0 * token0Price) / 1e18;
+        console.log("ammount0InEth", ammount0InEth);
+        uint256 ammount1InEth = (currentBalanceToken1 * token1Price) / 1e18;
+        console.log("ammount1InEth", ammount1InEth);
+
+        (uint256 amount0OptimalInEth, uint256 amount1OptimalInEth) = _calculateOptimalRatio(
+            ammount0InEth + ammount1InEth
+        );
+        console.log("amount0OptimalInEth", amount0OptimalInEth);
+        console.log("amount1OptimalInEth", amount1OptimalInEth);
+        uint256 amount0Optimal = amount0OptimalInEth * 1e18 / token0Price;
+        uint256 amount1Optimal = amount1OptimalInEth * 1e18 / token1Price;
+        _balanceAssets(amount0Optimal, amount1Optimal, currentBalanceToken0, currentBalanceToken1, token0Price, token1Price);
+
+        uint256 balancedToken0Balance = IERC20(token0).balanceOf(address(this));
+        uint256 balancedToken1Balance = IERC20(token1).balanceOf(address(this));
+        console.log("balancedToken0Balance", balancedToken0Balance);
+        console.log("balancedToken1Balance", balancedToken1Balance);
+
+        _createKIMPosition(balancedToken0Balance, balancedToken1Balance);
+
+        emit PoolMigrated(newPoolAddress, newToken0, newToken1, currentBalanceToken0, currentBalanceToken1);
     }
 }
