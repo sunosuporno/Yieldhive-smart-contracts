@@ -521,35 +521,9 @@ contract LiquidMode is
         uint256 newToken1Balance = IERC20(token1).balanceOf(address(this));
         console.log("newToken1Balance", newToken1Balance);
 
-
         uint128 reinvestedLiquidity;
         (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(token0ToReinvest, token1ToReinvest, true, true);
 
-        // Add liquidity with appropriate slippage checks based on available balances
-        // if (newToken0Balance >= token0ToReinvest) {
-        //     if (newToken1Balance >= token1ToReinvest) {
-        //         console.log("running 1");
-        //         (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(token0ToReinvest, token1ToReinvest, true, true);
-        //     } else {
-        //         console.log("running 2");
-        //         (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(token0ToReinvest, newToken1Balance, false, true);
-        //     }
-        // } else if (newToken1Balance >= token1ToReinvest) {
-        //     console.log("running 3");
-        //     (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(newToken0Balance, token1ToReinvest, true, false);
-        // }
-
-        // console.log("reinvestedLiquidity", reinvestedLiquidity);
-        // console.log("kimPosition.liquidity", kimPosition.liquidity);
-        // // Update KIM position
-        // kimPosition = KIMPosition({
-        //     tokenId: kimPosition.tokenId,
-        //     liquidity: kimPosition.liquidity + reinvestedLiquidity,
-        //     amount0: kimPosition.amount0 + token0ToReinvest,
-        //     amount1: kimPosition.amount1 + token1ToReinvest
-        // });
-
-        // console.log("new kimPosition.liquidity", kimPosition.liquidity);
         emit HarvestReinvestReport(
             amount0,
             amount1,
@@ -575,8 +549,8 @@ contract LiquidMode is
         console.log("token1ToReInvest", token1ToReInvest);
         if (currentToken0Amount > token0ToReInvest) {
             uint256 amount0ToSwap = currentToken0Amount - token0ToReInvest;
-            uint amountOut = _swapForToken(amount0ToSwap, token0, token1);
-            uint currentValueToken1 = amountOut + currentToken1Amount;
+            uint256 amountOut = _swapForToken(amount0ToSwap, token0, token1);
+            uint256 currentValueToken1 = amountOut + currentToken1Amount;
             if (currentValueToken1 >= token1ToReInvest) {
                 uint256 surplus = currentValueToken1 - token1ToReInvest;
                 uint256 surplusInETHToSwap = (surplus * token1Price / 1e18) / 2;
@@ -587,8 +561,8 @@ contract LiquidMode is
             console.log("running 1");
             uint256 amount1ToSwap = currentToken1Amount - token1ToReInvest;
             console.log("amount1ToSwap", amount1ToSwap);
-            uint amountOut = _swapForToken(amount1ToSwap, token1, token0);
-            uint currentValueToken0 = amountOut + currentToken0Amount;
+            uint256 amountOut = _swapForToken(amount1ToSwap, token1, token0);
+            uint256 currentValueToken0 = amountOut + currentToken0Amount;
             if (currentValueToken0 >= token0ToReInvest) {
                 uint256 surplus = currentValueToken0 - token0ToReInvest;
                 uint256 surplusInETHToSwap = (surplus * token0Price / 1e18) / 2;
@@ -780,54 +754,6 @@ contract LiquidMode is
         emit LiquidityFullyWithdrawn(kimPosition.tokenId, amount0, amount1);
     }
 
-    function burnNFT() external onlyOwner nonReentrant {
-        require(kimPosition.tokenId != 0, "No active position");
-        require(kimPosition.liquidity == 0, "Liquidity not fully withdrawn");
-
-        nonfungiblePositionManager.burn(kimPosition.tokenId);
-
-        emit NFTBurned(kimPosition.tokenId);
-
-        // Reset the position
-        kimPosition = KIMPosition({tokenId: 0, liquidity: 0, amount0: 0, amount1: 0});
-    }
-
-    function reinvestInNewPool(int24 newBottomTick, int24 newTopTick) external onlyOwner nonReentrant {
-        require(poolAddress != address(0), "Invalid pool address");
-        require(kimPosition.tokenId == 0, "Existing position not closed");
-
-        BOTTOM_TICK = newBottomTick;
-        TOP_TICK = newTopTick;
-
-        uint256 amount0 = IERC20(token0).balanceOf(address(this));
-        uint256 amount1 = IERC20(token1).balanceOf(address(this));
-
-        _createKIMPosition(amount0, amount1);
-
-        emit ReinvestedInNewPool(poolAddress, amount0, amount1);
-    }
-
-    function updateTokensAndPool(
-        address newToken0,
-        address newToken0EthProxy,
-        address newToken1,
-        address newToken1EthProxy,
-        address newPoolAddress
-    ) external onlyOwner {
-        require(newToken0 != address(0), "Invalid token0 address");
-        require(newToken0EthProxy != address(0), "Invalid token0 proxy address");
-        require(newToken1 != address(0), "Invalid token1 address");
-        require(newToken1EthProxy != address(0), "Invalid token1 proxy address");
-        require(newPoolAddress != address(0), "Invalid pool address");
-        require(strategistFeePercentage == 0, "Strategist fees must be claimed");
-
-        token0 = newToken0;
-        token0EthProxy = newToken0EthProxy;
-        token1 = newToken1;
-        token1EthProxy = newToken1EthProxy;
-        poolAddress = newPoolAddress;
-    }
-
     function migratePool(
         PoolType newPool,
         address newPoolAddress,
@@ -912,7 +838,7 @@ contract LiquidMode is
         console.log("currentBalanceToken0", currentBalanceToken0);
         console.log("currentBalanceToken1", currentBalanceToken1);
 
-        // balance tokens here 
+        // balance tokens here
         (int224 _token0Price,) = readDataFeed(token0EthProxy);
         uint256 token0Price = uint256(uint224(_token0Price));
         (int224 _token1Price,) = readDataFeed(token1EthProxy);
@@ -923,14 +849,15 @@ contract LiquidMode is
         uint256 ammount1InEth = (currentBalanceToken1 * token1Price) / 1e18;
         console.log("ammount1InEth", ammount1InEth);
 
-        (uint256 amount0OptimalInEth, uint256 amount1OptimalInEth) = _calculateOptimalRatio(
-            ammount0InEth + ammount1InEth
-        );
+        (uint256 amount0OptimalInEth, uint256 amount1OptimalInEth) =
+            _calculateOptimalRatio(ammount0InEth + ammount1InEth);
         console.log("amount0OptimalInEth", amount0OptimalInEth);
         console.log("amount1OptimalInEth", amount1OptimalInEth);
         uint256 amount0Optimal = amount0OptimalInEth * 1e18 / token0Price;
         uint256 amount1Optimal = amount1OptimalInEth * 1e18 / token1Price;
-        _balanceAssets(amount0Optimal, amount1Optimal, currentBalanceToken0, currentBalanceToken1, token0Price, token1Price);
+        _balanceAssets(
+            amount0Optimal, amount1Optimal, currentBalanceToken0, currentBalanceToken1, token0Price, token1Price
+        );
 
         uint256 balancedToken0Balance = IERC20(token0).balanceOf(address(this));
         uint256 balancedToken1Balance = IERC20(token1).balanceOf(address(this));
