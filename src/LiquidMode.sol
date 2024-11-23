@@ -177,8 +177,6 @@ contract LiquidMode is
 
         uint256 receivedToken0 = token0 == address(WETH) ? amount0 : _swapForToken(amount0, address(WETH), token0);
         uint256 receivedToken1 = token1 == address(WETH) ? amount1 : _swapForToken(amount1, address(WETH), token1);
-        console.log("receivedToken0", receivedToken0);
-        console.log("receivedToken1", receivedToken1);
         uint256 wethBalance = IERC20(WETH).balanceOf(address(this));
         if (wethBalance > 0 && token0 != address(WETH) && token1 != address(WETH)) {
             uint256 receivedToken0Dust = _swapForToken(wethBalance / 2, address(WETH), token0);
@@ -200,11 +198,6 @@ contract LiquidMode is
     {
         IERC20(token0).approve(address(nonfungiblePositionManager), amount0);
         IERC20(token1).approve(address(nonfungiblePositionManager), amount1);
-
-        console.log("amount0", amount0);
-        console.log("amount1", amount1);
-        console.log("minAmount0", amount0 * (10000 - liquiditySlippageTolerance) / 10000);
-        console.log("minAmount1", amount1 * (10000 - liquiditySlippageTolerance) / 10000);
 
         INonfungiblePositionManager.MintParams memory params = INonfungiblePositionManager.MintParams({
             token0: token0,
@@ -237,8 +230,6 @@ contract LiquidMode is
     {
         IERC20(token0).approve(address(nonfungiblePositionManager), amount0);
         IERC20(token1).approve(address(nonfungiblePositionManager), amount1);
-        console.log("amount0 getting added", amount0);
-        console.log("amount1 getting added", amount1);
 
         INonfungiblePositionManager.IncreaseLiquidityParams memory params = INonfungiblePositionManager
             .IncreaseLiquidityParams({
@@ -337,13 +328,8 @@ contract LiquidMode is
         (int224 _token1Price,) = readDataFeed(token1EthProxy);
         uint256 token1Price = uint256(uint224(_token1Price));
 
-        console.log("totalSupply", totalSupply());
-
         uint256 token0Amount = (kimPosition.amount0 * shares) / totalSupply();
         uint256 token1Amount = (kimPosition.amount1 * shares) / totalSupply();
-
-        console.log("token0Amount to withdraw", token0Amount);
-        console.log("token1Amount to withdraw", token1Amount);
 
         // Take out liquidity from KIM position
         (uint256 removedAmount0, uint256 removedAmount1, uint128 _liquidity) =
@@ -446,15 +432,11 @@ contract LiquidMode is
 
         // Convert input amount to token0 terms
         uint256 token0Amount = amount * (1e18) / token0Price;
-        console.log("amount total in token0Amount terms", token0Amount);
         // Calculate optimal liquidity
         uint128 liquidity = LiquidityAmounts.getLiquidityForAmount0(sqrtPriceLowerX96, sqrtPriceUpperX96, token0Amount);
-        console.log("liquidity calculated", liquidity);
         // Get token amounts for liquidity
         (amount0, amount1) =
             LiquidityAmounts.getAmountsForLiquidity(sqrtPriceX96, sqrtPriceLowerX96, sqrtPriceUpperX96, liquidity);
-        console.log("amount0 calculated to be invested", amount0);
-        console.log("amount1 calculated to be invested", amount1);
         // Convert back to ETH terms
         amount0 = amount0 * token0Price / (1e18);
         amount1 = amount1 * token1Price / (1e18);
@@ -463,8 +445,6 @@ contract LiquidMode is
     function harvestReinvestAndReport() external nonReentrant onlyRole(HARVESTER_ROLE) {
         // Collect any available fees first
         (uint256 amount0, uint256 amount1) = _collectKIMFees(0, 0);
-        console.log("amount0 after collectKIMFees", amount0);
-        console.log("amount1 after collectKIMFees", amount1);
 
         // Get price feeds for calculations
         (int224 _token0Price,) = readDataFeed(token0EthProxy);
@@ -482,9 +462,7 @@ contract LiquidMode is
 
             // Calculate and transfer strategist's share
             uint256 strategistAmount0 = (amount0 * strategistFeePercentage) / 10000;
-            console.log("strategistAmount0", strategistAmount0);
             uint256 strategistAmount1 = (amount1 * strategistFeePercentage) / 10000;
-            console.log("strategistAmount1", strategistAmount1);
             if (strategistAmount0 > 0) IERC20(token0).transfer(strategist, strategistAmount0);
             if (strategistAmount1 > 0) IERC20(token1).transfer(strategist, strategistAmount1);
 
@@ -493,33 +471,21 @@ contract LiquidMode is
 
         // Perform rebalancing regardless of fee collection
         uint256 remainingToken0 = IERC20(token0).balanceOf(address(this));
-        console.log("remainingToken0", remainingToken0);
         uint256 remainingToken1 = IERC20(token1).balanceOf(address(this));
-        console.log("remainingToken1", remainingToken1);
 
         uint256 remainingToken0InETH = remainingToken0 * token0Price / 1e18;
-        console.log("remainingToken0InETH", remainingToken0InETH);
         uint256 remainingToken1InETH = remainingToken1 * token1Price / 1e18;
-        console.log("remainingToken1InETH", remainingToken1InETH);
 
-        console.log("checking total funds to reinvest in ETH terms", remainingToken0InETH + remainingToken1InETH);
         (uint256 token0ToReinvestInETH, uint256 token1ToReinvestInETH) =
             _calculateOptimalRatio(remainingToken0InETH + remainingToken1InETH);
-        console.log("token0ToReinvestInETH", token0ToReinvestInETH);
-        console.log("token1ToReinvestInETH", token1ToReinvestInETH);
 
         uint256 token0ToReinvest = token0ToReinvestInETH * 1e18 / token0Price;
-        console.log("token0ToReinvest", token0ToReinvest);
         uint256 token1ToReinvest = token1ToReinvestInETH * 1e18 / token1Price;
-        console.log("token1ToReinvest", token1ToReinvest);
 
         _balanceAssets(token0ToReinvest, token1ToReinvest, remainingToken0, remainingToken1, token0Price, token1Price);
 
-        console.log("balancing assets completed");
         uint256 newToken0Balance = IERC20(token0).balanceOf(address(this));
-        console.log("newToken0Balance", newToken0Balance);
         uint256 newToken1Balance = IERC20(token1).balanceOf(address(this));
-        console.log("newToken1Balance", newToken1Balance);
 
         uint128 reinvestedLiquidity;
         (reinvestedLiquidity,,) = _addLiquidityToKIMPosition(token0ToReinvest, token1ToReinvest, true, true);
@@ -543,10 +509,6 @@ contract LiquidMode is
         uint256 token0Price,
         uint256 token1Price
     ) internal {
-        console.log("currentToken0Amount", currentToken0Amount);
-        console.log("currentToken1Amount", currentToken1Amount);
-        console.log("token0ToReInvest", token0ToReInvest);
-        console.log("token1ToReInvest", token1ToReInvest);
         if (currentToken0Amount > token0ToReInvest) {
             uint256 amount0ToSwap = currentToken0Amount - token0ToReInvest;
             uint256 amountOut = _swapForToken(amount0ToSwap, token0, token1);
@@ -558,9 +520,7 @@ contract LiquidMode is
                 _swapForToken(surplusToSwap, token1, token0);
             }
         } else if (currentToken0Amount < token0ToReInvest) {
-            console.log("running 1");
             uint256 amount1ToSwap = currentToken1Amount - token1ToReInvest;
-            console.log("amount1ToSwap", amount1ToSwap);
             uint256 amountOut = _swapForToken(amount1ToSwap, token1, token0);
             uint256 currentValueToken0 = amountOut + currentToken0Amount;
             if (currentValueToken0 >= token0ToReInvest) {
@@ -677,7 +637,6 @@ contract LiquidMode is
             _spendAllowance(owner, caller, shares);
         }
 
-        console.log("running _withdraw");
         uint256 wethWithdrawn = _withdrawFunds(assets, shares);
         _burn(owner, shares);
         _totalAccountedAssets -= assets;
@@ -790,7 +749,6 @@ contract LiquidMode is
         if (newToken0 == token0 || newToken0 == token1) {
             if (newToken0 == token0) {
                 // If newToken0 matches token0, swap token1 to newToken1
-                console.log("swapping token1 to newToken1");
                 uint256 token1Bal = IERC20(token1).balanceOf(address(this));
                 console.log("token1Bal", token1Bal);
                 if (token1Bal > 0) {

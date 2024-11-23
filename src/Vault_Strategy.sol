@@ -22,6 +22,7 @@ import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/U
 import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 
 contract VaultStrategy is
     Initializable,
@@ -52,7 +53,7 @@ contract VaultStrategy is
     IPoolAerodrome aerodromePool;
     IPythPriceUpdater public pythPriceUpdater;
     ISwapRouter02 public swapRouter;
-
+    AggregatorV3Interface public priceFeed;
     address public constant swapRouterAddress = 0x2626664c2603336E57B271c5C0b26F421741e481;
     address public constant cbETH = 0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22;
     address public constant AERO = 0x940181a94A35A4569E4529A3CDfB74e38FD98631;
@@ -60,9 +61,9 @@ contract VaultStrategy is
     address public constant aUSDC = 0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB;
     address public constant variableDebtCbETH = 0x1DabC36f19909425f654777249815c073E8Fd79F;
     uint256 public _totalAccountedAssets;
-    bytes32 public constant usdcUsdPriceFeedId = 0xeaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a;
-    bytes32 public constant cbEthUsdPriceFeedId = 0x15ecddd26d49e1a8f1de9376ebebc03916ede873447c1255d2d5891b92ce5717;
-    bytes32 public constant aeroUsdPriceFeedId = 0x9db37f4d5654aad3e37e2e14ffd8d53265fb3026d1d8f91146539eebaa2ef45f;
+    address public constant usdcUsdDataFeedAddress = 0x7e860098F58bBFC8648a4311b374B1D669a2bc6B;
+    address public constant cbEthUsdDataFeedAddress = 0xd7818272B9e248357d13057AAb0B417aF31E817d;
+    address public constant aeroUsdDataFeedAddress = 0x4EC5970fC728C5f65ba413992CD5fF6FD70fcfF0;
 
     // Add new state variables to keep track of the previous balances
     uint256 public previousAUSDCBalance;
@@ -196,10 +197,10 @@ contract VaultStrategy is
 
     function _investFunds(uint256 amount, address assetAddress) internal {
         // Get the price of the assets in USD from Pyth Network
-        bytes32[] memory priceFeedIds = new bytes32[](2);
-        priceFeedIds[0] = usdcUsdPriceFeedId;
-        priceFeedIds[1] = cbEthUsdPriceFeedId;
-        uint256[] memory prices = getPricePyth(priceFeedIds);
+        address[] memory dataFeedAddresses = new address[](2);
+        dataFeedAddresses[0] = usdcUsdDataFeedAddress;
+        dataFeedAddresses[1] = cbEthUsdDataFeedAddress;
+        uint256[] memory prices = getChainlinkDataFeedLatestAnswer(dataFeedAddresses);
         uint256 usdcPriceInUSD = prices[0];
         uint256 cbEthPriceInUSD = prices[1];
         // approve and supply the asset USDC to the Aave pool
@@ -231,11 +232,11 @@ contract VaultStrategy is
     }
 
     function _rebalancePosition(uint256 additionalAmountNeeded) internal {
-        bytes32[] memory priceFeedIds = new bytes32[](3);
-        priceFeedIds[0] = cbEthUsdPriceFeedId;
-        priceFeedIds[1] = usdcUsdPriceFeedId;
-        priceFeedIds[2] = aeroUsdPriceFeedId;
-        uint256[] memory prices = getPricePyth(priceFeedIds);
+        address[] memory dataFeedAddresses = new address[](3);
+        dataFeedAddresses[0] = cbEthUsdDataFeedAddress;
+        dataFeedAddresses[1] = usdcUsdDataFeedAddress;
+        dataFeedAddresses[2] = aeroUsdDataFeedAddress;
+        uint256[] memory prices = getChainlinkDataFeedLatestAnswer(dataFeedAddresses);
         uint256 cbEthPriceInUsd = prices[0];
         uint256 usdcPriceInUsd = prices[1];
         uint256 aeroPriceInUsd = prices[2];
@@ -300,10 +301,10 @@ contract VaultStrategy is
         uint256 additionalBorrowBase = targetDebtBase - totalDebtBase;
 
         if (additionalBorrowBase > 0) {
-            bytes32[] memory priceFeedIds = new bytes32[](2);
-            priceFeedIds[0] = usdcUsdPriceFeedId;
-            priceFeedIds[1] = cbEthUsdPriceFeedId;
-            uint256[] memory prices = getPricePyth(priceFeedIds);
+            address[] memory dataFeedAddresses = new address[](2);
+            dataFeedAddresses[0] = usdcUsdDataFeedAddress;
+            dataFeedAddresses[1] = cbEthUsdDataFeedAddress;
+            uint256[] memory prices = getChainlinkDataFeedLatestAnswer(dataFeedAddresses);
             uint256 usdcPriceInUSD = prices[0];
             uint256 cbEthPriceInUSD = prices[1];
 
@@ -344,11 +345,11 @@ contract VaultStrategy is
 
     function harvestReinvestAndReport() external onlyOwner nonReentrant {
         // Get prices from Pyth Network
-        bytes32[] memory priceFeedIds = new bytes32[](3);
-        priceFeedIds[0] = cbEthUsdPriceFeedId;
-        priceFeedIds[1] = usdcUsdPriceFeedId;
-        priceFeedIds[2] = aeroUsdPriceFeedId;
-        uint256[] memory prices = getPricePyth(priceFeedIds);
+        address[] memory dataFeedAddresses = new address[](3);
+        dataFeedAddresses[0] = cbEthUsdDataFeedAddress;
+        dataFeedAddresses[1] = usdcUsdDataFeedAddress;
+        dataFeedAddresses[2] = aeroUsdDataFeedAddress;
+        uint256[] memory prices = getChainlinkDataFeedLatestAnswer(dataFeedAddresses);
         uint256 cbETHPrice = prices[0];
         uint256 usdcPrice = prices[1];
         uint256 aeroPriceInUSD = prices[2];
@@ -459,13 +460,13 @@ contract VaultStrategy is
         TransferHelper.safeApprove(tokenIn, address(swapRouter), amountIn);
 
         // Get price feed IDs for both input and output tokens
-        bytes32 inPriceFeedId = getPriceFeedId(tokenIn);
-        bytes32 outPriceFeedId = getPriceFeedId(tokenOut);
+        address inPriceFeedId = getDataFeedAddress(tokenIn);
+        address outPriceFeedId = getDataFeedAddress(tokenOut);
 
-        bytes32[] memory priceFeedIds = new bytes32[](2);
-        priceFeedIds[0] = inPriceFeedId;
-        priceFeedIds[1] = outPriceFeedId;
-        uint256[] memory prices = getPricePyth(priceFeedIds);
+        address[] memory dataFeedAddresses = new address[](2);
+        dataFeedAddresses[0] = inPriceFeedId;
+        dataFeedAddresses[1] = outPriceFeedId;
+        uint256[] memory prices = getChainlinkDataFeedLatestAnswer(dataFeedAddresses);
         uint256 inPrice = prices[0];
         uint256 outPrice = prices[1];
 
@@ -494,13 +495,13 @@ contract VaultStrategy is
         amountOut = swapRouter.exactInput(params);
     }
 
-    function getPriceFeedId(address token) internal view returns (bytes32) {
+    function getDataFeedAddress(address token) internal view returns (address) {
         if (token == address(asset())) {
-            return usdcUsdPriceFeedId;
+            return usdcUsdDataFeedAddress;
         } else if (token == cbETH) {
-            return cbEthUsdPriceFeedId;
+            return cbEthUsdDataFeedAddress;
         } else if (token == AERO) {
-            return aeroUsdPriceFeedId;
+            return aeroUsdDataFeedAddress;
         } else {
             revert("Unsupported token");
         }
@@ -546,26 +547,52 @@ contract VaultStrategy is
         return _totalAccountedAssets;
     }
 
-    function getPricePyth(bytes32[] memory priceFeedIds) public payable returns (uint256[] memory) {
-        bytes[] memory priceUpdate = pythPriceUpdater.getPricePyth();
-        uint256 fee = pyth.getUpdateFee(priceUpdate);
-        pyth.updatePriceFeeds{value: fee}(priceUpdate);
+    // function getPricePyth(bytes32[] memory dataFeedAddresses) public payable returns (uint256[] memory) {
+    //     bytes[] memory priceUpdate = pythPriceUpdater.getPricePyth();
+    //     uint256 fee = pyth.getUpdateFee(priceUpdate);
+    //     pyth.updatePriceFeeds{value: fee}(priceUpdate);
 
-        uint256[] memory prices = new uint256[](priceFeedIds.length);
+    //     uint256[] memory prices = new uint256[](priceFeedIds.length);
 
-        // Read the current price from each price feed if it is less than 60 seconds old.
-        for (uint256 i = 0; i < priceFeedIds.length; i++) {
-            PythStructs.Price memory pythPrice = pyth.getPriceNoOlderThan(priceFeedIds[i], 120);
+    //     // Read the current price from each price feed if it is less than 60 seconds old.
+    //     for (uint256 i = 0; i < priceFeedIds.length; i++) {
+    //         PythStructs.Price memory pythPrice = pyth.getPriceNoOlderThan(priceFeedIds[i], 120);
 
-            // Convert the price to a uint256 value
-            // The price is stored as a signed integer with a specific exponent
-            // We need to adjust it to get the actual price in a common unit (e.g., 18 decimals)
-            int64 price = pythPrice.price;
+    //         // Convert the price to a uint256 value
+    //         // The price is stored as a signed integer with a specific exponent
+    //         // We need to adjust it to get the actual price in a common unit (e.g., 18 decimals)
+    //         int64 price = pythPrice.price;
 
-            // Convert the price to a positive value with 18 decimals
-            uint256 adjustedPrice = uint256(uint64(price));
+    //         // Convert the price to a positive value with 18 decimals
+    //         uint256 adjustedPrice = uint256(uint64(price));
 
-            prices[i] = adjustedPrice;
+    //         prices[i] = adjustedPrice;
+    //     }
+
+    //     return prices;
+    // }
+
+    function getChainlinkDataFeedLatestAnswer(address[] memory dataFeeds) public payable returns (uint256[] memory) {
+        // Create array to store prices
+        uint256[] memory prices = new uint256[](dataFeeds.length);
+
+        // Get prices for each feed
+        for (uint256 i = 0; i < dataFeeds.length; i++) {
+            // Get latest round data
+            (
+                /* uint80 roundID */
+                ,
+                int256 answer,
+                uint256 startedAt,
+                uint256 timeStamp,
+                /* uint80 answeredInRound */
+            ) = AggregatorV3Interface(dataFeeds[i]).latestRoundData();
+
+            // Check if price is stale (older than 120 seconds, matching Pyth's check)
+            require(block.timestamp - timeStamp <= 120, "Chainlink price too old");
+
+            // Convert to uint256 and store in prices array
+            prices[i] = uint256(answer);
         }
 
         return prices;
