@@ -418,15 +418,23 @@ contract Vault_StrategyTest is Test {
         console.log("afterDepositUserBalance", afterDepositUserBalance);
         uint256 afterDepositVaultShares = vaultStrategy.balanceOf(user);
         uint256 afterDepositVaultAssets = vaultStrategy.totalAssets();
+        uint256 afterDepositTotalSupply = vaultStrategy.totalSupply();
+        console.log("afterDepositTotalSupply", afterDepositTotalSupply);
 
         // Withdraw half of the deposit
         uint256 withdrawAmount = depositAmount / 2; // 50 USDC
         console.log("withdrawAmount", withdrawAmount);
+        uint256 lpTokensBeforeWithdraw =
+            IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy));
+        console.log("lpTokensBeforeWithdraw", lpTokensBeforeWithdraw);
         vaultStrategy.withdraw(withdrawAmount, user, user);
         vm.stopPrank();
 
         uint256 afterWithdrawUserBalance = usdc.balanceOf(user);
+        uint256 afterWithdrawTotalSupply = vaultStrategy.totalSupply();
         console.log("afterWithdrawUserBalance", afterWithdrawUserBalance);
+        console.log("afterWithdrawTotalSupply", afterWithdrawTotalSupply);
+
         // Verify final states
         assertEq(
             usdc.balanceOf(user), afterDepositUserBalance + withdrawAmount, "Incorrect USDC balance after withdrawal"
@@ -438,6 +446,11 @@ contract Vault_StrategyTest is Test {
             vaultStrategy.totalAssets(),
             afterDepositVaultAssets - withdrawAmount,
             "Incorrect total assets after withdrawal"
+        );
+        assertEq(
+            afterWithdrawTotalSupply,
+            afterDepositTotalSupply - withdrawAmount,
+            "Incorrect total supply after withdrawal"
         );
 
         // Verify remaining investment positions

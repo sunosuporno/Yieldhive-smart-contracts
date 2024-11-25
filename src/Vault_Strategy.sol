@@ -35,15 +35,6 @@ contract VaultStrategy is
     using SafeERC20 for IERC20;
     using EnumerableSet for EnumerableSet.AddressSet;
 
-    struct WithdrawalRequest {
-        uint256 shares;
-        uint256 assets;
-        bool fulfilled;
-    }
-
-    mapping(address => WithdrawalRequest) public withdrawalRequests;
-    EnumerableSet.AddressSet private withdrawalRequestors;
-
     IPoolAave aavePool;
     IAaveOracle aaveOracle;
     IPoolDataProvider aaveProtocolDataProvider;
@@ -155,26 +146,32 @@ contract VaultStrategy is
         emit Deposit(caller, receiver, assets, shares);
     }
 
-    function _withdrawFunds(uint256 amount) internal nonReentrant {
+    function _withdrawFunds(uint256 amount) internal {
+        console.log("withdrawing funds");
         uint256 maxWithdrawable = getMaxWithdrawableAmount();
+        console.log("maxWithdrawable", maxWithdrawable);
 
         if (amount <= maxWithdrawable) {
             // Normal flow for amounts within maxWithdrawable
+            console.log("withdrawing from Aave");
             aavePool.withdraw(asset(), amount, address(this));
 
             // Check and rebalance if necessary
             uint256 healthFactor = calculateHealthFactor();
             uint256 currentHealthFactor4Dec = healthFactor / 1e14;
             uint256 bufferedTargetHealthFactor = TARGET_HEALTH_FACTOR + HEALTH_FACTOR_BUFFER;
-
+            console.log("currentHealthFactor4Dec", currentHealthFactor4Dec);
             if (currentHealthFactor4Dec < bufferedTargetHealthFactor) {
+                console.log("rebalancing position");
                 _rebalancePosition(0);
             }
         } else {
+            console.log("withdrawing more than maxWithdrawable");
             // Handle case where amount exceeds maxWithdrawable
             aavePool.withdraw(asset(), maxWithdrawable, address(this));
-
+            console.log("withdrew from Aave");
             uint256 additionalAmountNeeded = amount - maxWithdrawable;
+            console.log("additionalAmountNeeded", additionalAmountNeeded);
             _rebalancePosition(additionalAmountNeeded);
 
             // After rebalancing, try to withdraw any remaining amount
@@ -249,12 +246,15 @@ contract VaultStrategy is
                 totalDebtBase - (totalCollateralBase * currentLiquidationThreshold) / bufferedTargetHealthFactor;
         }
 
-        // Convert amountToFreeUp from USDC to cbETH
         uint256 cbEthEquivalent = (amountToFreeUp * 1e18 * usdcPriceInUsd) / (cbEthPriceInUsd * 1e6);
+        console.log("cbEthEquivalent", cbEthEquivalent);
+
+        // Convert cbEthEquivalent to USD value with 8 decimals
+        uint256 cbEthValueInUsd = (cbEthEquivalent * cbEthPriceInUsd) / 1e18;
 
         // Calculate how much to withdraw from Aerodrome Pool
-        uint256 lpTokensToBurn = _calculateLPTokensToWithdraw(cbEthEquivalent, usdcPriceInUsd, aeroPriceInUsd);
-
+        uint256 lpTokensToBurn = _calculateLPTokensToWithdraw(cbEthValueInUsd, usdcPriceInUsd, aeroPriceInUsd);
+        console.log("lpTokensToBurn", lpTokensToBurn);
         IERC20(address(aerodromePool)).transfer(address(aerodromePool), lpTokensToBurn);
         (uint256 usdc, uint256 aero) = aerodromePool.burn(address(this));
 
@@ -326,16 +326,33 @@ contract VaultStrategy is
         view
         returns (uint256 sharesToBurn)
     {
-        (uint256 reserve0,,) = aerodromePool.getReserves();
+        console.log("calculating LP tokens to withdraw");
+
+        // Get pool reserves and total supply
+        (uint256 reserve0, uint256 reserve1,) = aerodromePool.getReserves();
+        console.log("reserve0", reserve0);
+        console.log("reserve1", reserve1);
         uint256 totalSupplyPoolToken = IERC20(address(aerodromePool)).totalSupply();
+        console.log("totalSupplyPoolToken", totalSupplyPoolToken);
+        uint256 ourLPBalance = IERC20(address(aerodromePool)).balanceOf(address(this));
 
-        // Calculate desired amounts, dividing by 2 to split equally between USDC and AERO
+        // Calculate the total pool value in USD
+        uint256 usdcValueInPool = (reserve0 * usdcPriceInUsd) / 1e6; // USDC has 6 decimals
+        uint256 aeroValueInPool = (reserve1 * aeroPriceInUsd) / 1e18; // AERO has 18 decimals
+
+        uint256 totalPoolValueInUsd = usdcValueInPool + aeroValueInPool;
+
         uint256 halfCbEthValueInUsd = cbEthValueInUsd / 2;
-        uint256 desiredUsdc = (halfCbEthValueInUsd * 1e6) / usdcPriceInUsd; // Convert to USDC with 6 decimals
-        // uint256 desiredAero = (halfCbEthValueInUsd * 1e18) / aeroPriceInUsd; // Convert to AERO with 18 decimals
+        console.log("halfCbEthValueInUsd", halfCbEthValueInUsd);
+        uint256 desiredUsdc = (halfCbEthValueInUsd * 1e6) / usdcPriceInUsd;
+        console.log("desiredUsdc", desiredUsdc);
 
-        // Calculate the amount of LP tokens to burn
-        sharesToBurn = (desiredUsdc * totalSupplyPoolToken) / reserve0;
+        // Calculate what portion of the pool we need to withdraw
+        uint256 sharesToBurnBig = (cbEthValueInUsd * totalSupplyPoolToken) / totalPoolValueInUsd;
+
+        // Make sure we don't try to burn more than we have
+        sharesToBurn = Math.min(sharesToBurnBig, ourLPBalance);
+        console.log("sharesToBurn", sharesToBurn);
     }
 
     function harvestReinvestAndReport() external onlyOwner nonReentrant {
@@ -606,8 +623,8 @@ contract VaultStrategy is
     }
 
     function getMaxWithdrawableAmount() public view returns (uint256) {
-        // Get the available (unborrowed) liquidity
-        uint256 availableLiquidity = IERC20(aUSDC).balanceOf(address(asset()));
+        // Get the available (unborrowed) liquidity - fix the address here
+        uint256 availableLiquidity = IERC20(aUSDC).balanceOf(address(this));
 
         (uint256 totalCollateralBase, uint256 totalDebtBase,, uint256 currentLiquidationThreshold,,) =
             aavePool.getUserAccountData(address(this));
@@ -690,50 +707,50 @@ contract VaultStrategy is
     //     _investFunds(amountToInvest, asset());
     // }
 
-    function processWithdrawalRequests() external onlyOwner nonReentrant {
-        uint256 totalAssetsToWithdraw = 0;
-        uint256 availableAssets = 0;
+    // function processWithdrawalRequests() external onlyOwner nonReentrant {
+    //     uint256 totalAssetsToWithdraw = 0;
+    //     uint256 availableAssets = 0;
 
-        // Calculate total assets to withdraw
-        for (uint256 i = 0; i < withdrawalRequestors.length(); i++) {
-            address requestor = withdrawalRequestors.at(i);
-            WithdrawalRequest storage request = withdrawalRequests[requestor];
+    //     // Calculate total assets to withdraw
+    //     for (uint256 i = 0; i < withdrawalRequestors.length(); i++) {
+    //         address requestor = withdrawalRequestors.at(i);
+    //         WithdrawalRequest storage request = withdrawalRequests[requestor];
 
-            if (!request.fulfilled) {
-                totalAssetsToWithdraw += request.assets;
-            }
-        }
+    //         if (!request.fulfilled) {
+    //             totalAssetsToWithdraw += request.assets;
+    //         }
+    //     }
 
-        // Withdraw funds if needed
-        if (totalAssetsToWithdraw > 0) {
-            _withdrawFunds(totalAssetsToWithdraw);
-            availableAssets = IERC20(asset()).balanceOf(address(this)) - accumulatedDeposits;
-        }
+    //     // Withdraw funds if needed
+    //     if (totalAssetsToWithdraw > 0) {
+    //         _withdrawFunds(totalAssetsToWithdraw);
+    //         availableAssets = IERC20(asset()).balanceOf(address(this)) - accumulatedDeposits;
+    //     }
 
-        uint256 j = 0;
-        while (j < withdrawalRequestors.length() && totalAssetsToWithdraw > 0 && availableAssets > 0) {
-            address requestor = withdrawalRequestors.at(j);
-            WithdrawalRequest storage request = withdrawalRequests[requestor];
+    //     uint256 j = 0;
+    //     while (j < withdrawalRequestors.length() && totalAssetsToWithdraw > 0 && availableAssets > 0) {
+    //         address requestor = withdrawalRequestors.at(j);
+    //         WithdrawalRequest storage request = withdrawalRequests[requestor];
 
-            if (!request.fulfilled) {
-                uint256 toDistribute = Math.min(request.assets, Math.min(totalAssetsToWithdraw, availableAssets));
+    //         if (!request.fulfilled) {
+    //             uint256 toDistribute = Math.min(request.assets, Math.min(totalAssetsToWithdraw, availableAssets));
 
-                availableAssets -= toDistribute;
-                totalAssetsToWithdraw -= toDistribute;
-                IERC20(asset()).safeTransfer(requestor, toDistribute);
-                if (toDistribute == request.assets) {
-                    request.fulfilled = true;
-                    withdrawalRequestors.remove(requestor);
-                    // Don't increment i as we've removed an element
-                } else {
-                    request.assets -= toDistribute;
-                    j++;
-                }
-            } else {
-                j++;
-            }
-        }
-    }
+    //             availableAssets -= toDistribute;
+    //             totalAssetsToWithdraw -= toDistribute;
+    //             IERC20(asset()).safeTransfer(requestor, toDistribute);
+    //             if (toDistribute == request.assets) {
+    //                 request.fulfilled = true;
+    //                 withdrawalRequestors.remove(requestor);
+    //                 // Don't increment i as we've removed an element
+    //             } else {
+    //                 request.assets -= toDistribute;
+    //                 j++;
+    //             }
+    //         } else {
+    //             j++;
+    //         }
+    //     }
+    // }
 
     // Add pause and unpause functions
     function pause() external onlyOwner {
@@ -758,16 +775,11 @@ contract VaultStrategy is
 
         _burn(owner, shares);
 
-        WithdrawalRequest storage existingRequest = withdrawalRequests[owner];
-        if (existingRequest.assets > 0) {
-            // Update existing request
-            existingRequest.assets += assets;
-            existingRequest.shares += shares;
-        } else {
-            // Create new request
-            withdrawalRequests[owner] = WithdrawalRequest({shares: shares, assets: assets, fulfilled: false});
-            withdrawalRequestors.add(owner);
-        }
+        // Directly withdraw funds
+        _withdrawFunds(assets);
+
+        // Transfer assets to receiver
+        SafeERC20.safeTransfer(IERC20(asset()), receiver, assets);
 
         emit Withdraw(caller, receiver, owner, assets, shares);
     }
