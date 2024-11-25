@@ -280,4 +280,62 @@ contract Vault_StrategyTest is Test {
     //     uint256 totalAssetsAfterInvest = vaultStrategy.totalAssets();
     //     assertApproxEqRel(totalAssetsAfterInvest, 800 * 10 ** 6, 1e16); // 1% tolerance
     // }
+
+    function testDoubleDeposit() public {
+        // Initial deposit
+        uint256 firstDepositAmount = 50_000_000; // 50 USDC
+        vm.startPrank(user);
+        vaultStrategy.deposit(firstDepositAmount, user);
+
+        // Record state after first deposit
+        uint256 sharesAfterFirst = vaultStrategy.balanceOf(user);
+        uint256 assetsAfterFirst = vaultStrategy.totalAssets();
+        assertEq(sharesAfterFirst, firstDepositAmount, "Incorrect shares after first deposit");
+        assertEq(assetsAfterFirst, firstDepositAmount, "Incorrect assets after first deposit");
+
+        // Second deposit
+        uint256 secondDepositAmount = 30_000_000; // 30 USDC
+        vaultStrategy.deposit(secondDepositAmount, user);
+        vm.stopPrank();
+
+        // Verify final state
+        uint256 finalShares = vaultStrategy.balanceOf(user);
+        uint256 finalAssets = vaultStrategy.totalAssets();
+        assertEq(finalShares, firstDepositAmount + secondDepositAmount, "Incorrect final shares");
+        assertEq(finalAssets, firstDepositAmount + secondDepositAmount, "Incorrect final assets");
+
+        // Verify exchange rate consistency
+        assertEq(
+            vaultStrategy.convertToAssets(finalShares),
+            firstDepositAmount + secondDepositAmount,
+            "Share to asset conversion mismatch"
+        );
+    }
+
+    function testDoubleMint() public {
+        // Initial mint
+        uint256 firstMintShares = 50_000_000; // 50 shares
+        vm.startPrank(user);
+        uint256 firstAssets = vaultStrategy.mint(firstMintShares, user);
+
+        // Record state after first mint
+        uint256 sharesAfterFirst = vaultStrategy.balanceOf(user);
+        uint256 assetsAfterFirst = vaultStrategy.totalAssets();
+        assertEq(sharesAfterFirst, firstMintShares, "Incorrect shares after first mint");
+        assertEq(assetsAfterFirst, firstAssets, "Incorrect assets after first mint");
+
+        // Second mint
+        uint256 secondMintShares = 30_000_000; // 30 shares
+        uint256 secondAssets = vaultStrategy.mint(secondMintShares, user);
+        vm.stopPrank();
+
+        // Verify final state
+        uint256 finalShares = vaultStrategy.balanceOf(user);
+        uint256 finalAssets = vaultStrategy.totalAssets();
+        assertEq(finalShares, firstMintShares + secondMintShares, "Incorrect final shares");
+        assertEq(finalAssets, firstAssets + secondAssets, "Incorrect final assets");
+
+        // Verify exchange rate consistency
+        assertEq(vaultStrategy.convertToShares(finalAssets), finalShares, "Asset to share conversion mismatch");
+    }
 }
