@@ -11,10 +11,7 @@ import {ERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/
 import {IPool as IPoolAave} from "./interfaces/IPool.sol";
 import {IPool as IPoolAerodrome} from "./interfaces/IPoolAerodrome.sol";
 import {IPoolDataProvider} from "./interfaces/IPoolDataProvider.sol";
-import {IPyth} from "@pythnetwork/pyth-sdk-solidity/IPyth.sol";
-import {PythStructs} from "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 import {TransferHelper} from "@uniswap/v3-periphery/contracts/libraries/TransferHelper.sol";
-import {IPythPriceUpdater} from "./interfaces/IPythPriceUpdater.sol";
 import {ISwapRouter02, IV3SwapRouter} from "./interfaces/ISwapRouter.sol";
 import {IAaveOracle} from "./interfaces/IAaveOracle.sol";
 import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/ReentrancyGuardUpgradeable.sol";
@@ -23,6 +20,7 @@ import {Initializable} from "@openzeppelin/contracts-upgradeable/proxy/utils/Ini
 import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
+import {console} from "forge-std/Test.sol";
 
 contract VaultStrategy is
     Initializable,
@@ -46,12 +44,10 @@ contract VaultStrategy is
     mapping(address => WithdrawalRequest) public withdrawalRequests;
     EnumerableSet.AddressSet private withdrawalRequestors;
 
-    IPyth pyth;
     IPoolAave aavePool;
     IAaveOracle aaveOracle;
     IPoolDataProvider aaveProtocolDataProvider;
-    IPoolAerodrome aerodromePool;
-    IPythPriceUpdater public pythPriceUpdater;
+    IPoolAerodrome public aerodromePool;
     ISwapRouter02 public swapRouter;
     AggregatorV3Interface public priceFeed;
     address public constant swapRouterAddress = 0x2626664c2603336E57B271c5C0b26F421741e481;
@@ -115,13 +111,11 @@ contract VaultStrategy is
         address initialOwner,
         string memory name_,
         string memory symbol_,
-        address pythContract,
         address aavePoolContract,
         address aaveProtocolDataProviderContract,
-        address aerodromePoolContract,
-        address pythPriceUpdaterContract,
         address aaveOracleContract,
-        address _strategist
+        address _strategist,
+        address aerodromePoolContract
     ) public initializer {
         __ERC4626_init(asset_);
         __ERC20_init(name_, symbol_);
@@ -133,15 +127,12 @@ contract VaultStrategy is
 
         _grantRole(DEFAULT_ADMIN_ROLE, initialOwner);
         _grantRole(REBALANCER_ROLE, initialOwner);
-
-        pyth = IPyth(pythContract);
         aavePool = IPoolAave(aavePoolContract);
         aaveProtocolDataProvider = IPoolDataProvider(aaveProtocolDataProviderContract);
-        aerodromePool = IPoolAerodrome(aerodromePoolContract);
-        pythPriceUpdater = IPythPriceUpdater(pythPriceUpdaterContract);
         swapRouter = ISwapRouter02(swapRouterAddress);
         aaveOracle = IAaveOracle(aaveOracleContract);
         strategist = _strategist;
+        aerodromePool = IPoolAerodrome(aerodromePoolContract);
     }
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
@@ -155,8 +146,11 @@ contract VaultStrategy is
         // Mint shares to the receiver
         _mint(receiver, shares);
 
-        // Accumulate deposits instead of investing
-        accumulatedDeposits += assets;
+        // Add accounting for _totalAccountedAssets
+        _totalAccountedAssets += assets;
+        console.log("Accumulated deposits", accumulatedDeposits);
+        console.log("Assets", assets);
+        _investFunds(assets, assetAddress);
 
         emit Deposit(caller, receiver, assets, shares);
     }
@@ -207,6 +201,8 @@ contract VaultStrategy is
         IERC20(assetAddress).approve(address(aavePool), amount);
         aavePool.supply(assetAddress, amount, address(this), 0);
 
+        console.log("invested in Aave");
+
         // Convert the amount of USDC supplied to 18 decimals
         uint256 usdcAmountIn18Decimals = amount * 10 ** 12;
         // Finding total price of the asset supplied in USD (now correctly using 10**8)
@@ -220,15 +216,14 @@ contract VaultStrategy is
         // Borrowing cbETH after calculating a safe amount
         uint256 safeAmount = (cbEthAbleToBorrow * 95) / 100;
         aavePool.borrow(cbETH, safeAmount, 2, 0, address(this));
+        console.log("borrowed cbETH");
         uint256 cbEthBalance = IERC20(cbETH).balanceOf(address(this));
         (uint256 usdcReceived, uint256 aeroReceived) = _swapcbETHToUSDCAndAERO(cbEthBalance);
+        console.log("swapped cbETH to USDC and AERO");
         IERC20(asset()).safeTransfer(address(aerodromePool), usdcReceived);
         IERC20(AERO).safeTransfer(address(aerodromePool), aeroReceived);
         aerodromePool.mint(address(this));
         aerodromePool.skim(address(this));
-
-        // Add accounting for _totalAccountedAssets
-        _totalAccountedAssets += amount;
     }
 
     function _rebalancePosition(uint256 additionalAmountNeeded) internal {
@@ -469,6 +464,7 @@ contract VaultStrategy is
         uint256[] memory prices = getChainlinkDataFeedLatestAnswer(dataFeedAddresses);
         uint256 inPrice = prices[0];
         uint256 outPrice = prices[1];
+        console.log("Price calculated for swap");
 
         // Calculate the expected amount out
         uint256 expectedAmountOut = (amountIn * inPrice) / outPrice;
@@ -482,6 +478,7 @@ contract VaultStrategy is
 
         // Calculate the minimum amount out with 2% slippage tolerance
         uint256 amountOutMinimum = (expectedAmountOut * 98) / 100;
+        console.log("Amount out minimum calculated");
 
         bytes memory path = abi.encodePacked(tokenIn, uint24(fee1), WETH9, uint24(fee2), tokenOut);
 
@@ -491,8 +488,10 @@ contract VaultStrategy is
             amountIn: amountIn,
             amountOutMinimum: amountOutMinimum
         });
+        console.log("Params set for swap");
 
         amountOut = swapRouter.exactInput(params);
+        console.log("Swap executed");
     }
 
     function getDataFeedAddress(address token) internal view returns (address) {
@@ -512,12 +511,13 @@ contract VaultStrategy is
         returns (uint256 amountOutUSDC, uint256 amountOutAERO)
     {
         address assetAddress = asset();
+        console.log("swapping cbETH to USDC and AERO");
         // Swap half of cbETH to AERO
         amountOutAERO = _swap(cbETH, AERO, 500, 3000, amountIn / 2);
-
+        console.log("swapped cbETH to AERO");
         // Swap the other half of cbETH to USDC
         amountOutUSDC = _swap(cbETH, assetAddress, 500, 500, amountIn / 2);
-
+        console.log("swapped cbETH to USDC");
         return (amountOutUSDC, amountOutAERO);
     }
 
@@ -587,9 +587,6 @@ contract VaultStrategy is
                 uint256 timeStamp,
                 /* uint80 answeredInRound */
             ) = AggregatorV3Interface(dataFeeds[i]).latestRoundData();
-
-            // Check if price is stale (older than 120 seconds, matching Pyth's check)
-            require(block.timestamp - timeStamp <= 120, "Chainlink price too old");
 
             // Convert to uint256 and store in prices array
             prices[i] = uint256(answer);
@@ -684,14 +681,14 @@ contract VaultStrategy is
     }
 
     // Add a new function to invest accumulated funds
-    function investAccumulatedFunds() external onlyOwner nonReentrant {
-        require(accumulatedDeposits > 0, "No accumulated deposits to invest");
+    // function investAccumulatedFunds() external onlyOwner nonReentrant {
+    //     require(accumulatedDeposits > 0, "No accumulated deposits to invest");
 
-        uint256 amountToInvest = accumulatedDeposits;
-        accumulatedDeposits = 0;
+    //     uint256 amountToInvest = accumulatedDeposits;
+    //     accumulatedDeposits = 0;
 
-        _investFunds(amountToInvest, asset());
-    }
+    //     _investFunds(amountToInvest, asset());
+    // }
 
     function processWithdrawalRequests() external onlyOwner nonReentrant {
         uint256 totalAssetsToWithdraw = 0;
