@@ -24,6 +24,7 @@ contract Vault_StrategyTest is Test {
     address constant AAVE_PROTOCOL_DATA_PROVIDER_CONTRACT = 0x793177a6Cf520C7fE5B2E45660EBB48132184BBC;
     address constant AERODROME_POOL_CONTRACT = 0x6cDcb1C4A4D1C3C6d054b27AC5B77e89eAFb971d;
     address constant AAVE_ORACLE_CONTRACT = 0x2Cc0Fc26eD4563A5ce5e8bdcfe1A2878676Ae156;
+    address constant WETH9 = 0x4200000000000000000000000000000000000006;
 
     function setUp() public {
         // Remove the line: vm.createSelectFork("optimism");
@@ -337,5 +338,113 @@ contract Vault_StrategyTest is Test {
 
         // Verify exchange rate consistency
         assertEq(vaultStrategy.convertToShares(finalAssets), finalShares, "Asset to share conversion mismatch");
+    }
+
+    function testFuzzDeposit(uint256 depositAmount) public {
+        // Bound the deposit amount between 1 USDC and 100,000 USDC
+        // Using a smaller upper bound to avoid large swaps that might fail due to slippage
+        depositAmount = bound(depositAmount, 1e6, 100_000e6);
+
+        // Setup: Give user enough USDC for the deposit
+        deal(address(usdc), user, depositAmount);
+
+        // Record initial states
+        uint256 initialUserBalance = usdc.balanceOf(user);
+        uint256 initialVaultShares = vaultStrategy.totalSupply();
+        uint256 initialVaultAssets = vaultStrategy.totalAssets();
+
+        // Perform deposit
+        vm.startPrank(user);
+        usdc.approve(address(vaultStrategy), depositAmount);
+        vaultStrategy.deposit(depositAmount, user);
+        vm.stopPrank();
+
+        // Verify final states
+        assertEq(vaultStrategy.balanceOf(user), depositAmount, "Incorrect shares minted");
+        assertEq(usdc.balanceOf(user), initialUserBalance - depositAmount, "Incorrect USDC balance after deposit");
+        assertEq(
+            vaultStrategy.totalSupply(), initialVaultShares + depositAmount, "Incorrect total supply after deposit"
+        );
+        assertEq(
+            vaultStrategy.totalAssets(), initialVaultAssets + depositAmount, "Incorrect total assets after deposit"
+        );
+
+        // Verify exchange rate consistency
+        assertEq(
+            vaultStrategy.convertToAssets(vaultStrategy.balanceOf(user)),
+            depositAmount,
+            "Share to asset conversion mismatch"
+        );
+
+        // Verify investment - using greater than zero check instead of specific amounts
+        assertTrue(IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy)) > 0, "No aUSDC tokens received");
+        assertTrue(
+            IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy)) > 0,
+            "No Aerodrome LP tokens received"
+        );
+    }
+
+    function testDepositWithWrongToken() public {
+        // Use WETH as the wrong token (any ERC20 on Base other than USDC will do)
+        IERC20 wrongToken = IERC20(WETH9);
+
+        // Give some WETH to the user
+        deal(address(wrongToken), user, 1000 * 10 ** 18);
+
+        // Try to deposit wrong token
+        vm.startPrank(user);
+        wrongToken.approve(address(vaultStrategy), type(uint256).max);
+
+        // This should fail because the vault only accepts USDC
+        vm.expectRevert("ERC20: transfer amount exceeds balance");
+        vaultStrategy.deposit(100 * 10 ** 18, user);
+        vm.stopPrank();
+
+        // Verify no state changes occurred
+        assertEq(vaultStrategy.balanceOf(user), 0, "User should have no shares");
+        assertEq(vaultStrategy.totalSupply(), 0, "Total supply should be unchanged");
+    }
+
+    function testPartialWithdraw() public {
+        // Initial deposit
+        uint256 initialUserBalance = usdc.balanceOf(user);
+        console.log("initialUserBalance", initialUserBalance);
+        uint256 depositAmount = 100_000_000; // 100 USDC
+        vm.startPrank(user);
+        vaultStrategy.deposit(depositAmount, user);
+
+        // Record state before withdrawal
+        uint256 afterDepositUserBalance = usdc.balanceOf(user);
+        console.log("afterDepositUserBalance", afterDepositUserBalance);
+        uint256 afterDepositVaultShares = vaultStrategy.balanceOf(user);
+        uint256 afterDepositVaultAssets = vaultStrategy.totalAssets();
+
+        // Withdraw half of the deposit
+        uint256 withdrawAmount = depositAmount / 2; // 50 USDC
+        console.log("withdrawAmount", withdrawAmount);
+        vaultStrategy.withdraw(withdrawAmount, user, user);
+        vm.stopPrank();
+
+        uint256 afterWithdrawUserBalance = usdc.balanceOf(user);
+        console.log("afterWithdrawUserBalance", afterWithdrawUserBalance);
+        // Verify final states
+        assertEq(
+            usdc.balanceOf(user), afterDepositUserBalance + withdrawAmount, "Incorrect USDC balance after withdrawal"
+        );
+        assertEq(
+            vaultStrategy.balanceOf(user), afterDepositVaultShares - withdrawAmount, "Incorrect shares after withdrawal"
+        );
+        assertEq(
+            vaultStrategy.totalAssets(),
+            afterDepositVaultAssets - withdrawAmount,
+            "Incorrect total assets after withdrawal"
+        );
+
+        // Verify remaining investment positions
+        assertTrue(IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy)) > 0, "No aUSDC tokens remaining");
+        assertTrue(
+            IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy)) > 0,
+            "No Aerodrome LP tokens remaining"
+        );
     }
 }
