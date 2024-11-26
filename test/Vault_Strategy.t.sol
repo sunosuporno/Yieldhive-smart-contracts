@@ -8,6 +8,7 @@ import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transpa
 import {ProxyAdmin} from "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import {ERC4626Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
 
 contract Vault_StrategyTest is Test {
     VaultStrategy public vaultStrategy;
@@ -532,6 +533,7 @@ contract Vault_StrategyTest is Test {
         amounts[2] = 50_000e6; // Maximum for our test environment
 
         for (uint256 i = 0; i < amounts.length; i++) {
+            console.log("amounts[i]", amounts[i]);
             deal(address(usdc), user, amounts[i]);
 
             vm.startPrank(user);
@@ -545,5 +547,30 @@ contract Vault_StrategyTest is Test {
             vm.prank(user);
             vaultStrategy.withdraw(amounts[i], user, user);
         }
+    }
+
+    function testWithdrawMoreThanDeposited() public {
+        // Initial deposit
+        uint256 depositAmount = 100_000_000; // 100 USDC
+
+        vm.startPrank(user);
+        vaultStrategy.deposit(depositAmount, user);
+
+        // Try to withdraw more than deposited
+        uint256 withdrawAmount = depositAmount + 1e6; // 101 USDC
+
+        // Expect the OpenZeppelin error
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ERC4626Upgradeable.ERC4626ExceededMaxWithdraw.selector, user, withdrawAmount, depositAmount
+            )
+        );
+        vaultStrategy.withdraw(withdrawAmount, user, user);
+
+        vm.stopPrank();
+
+        // Verify state hasn't changed
+        assertEq(vaultStrategy.balanceOf(user), depositAmount, "User shares should remain unchanged");
+        assertEq(vaultStrategy.totalSupply(), depositAmount, "Total supply should remain unchanged");
     }
 }
