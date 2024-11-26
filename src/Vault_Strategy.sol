@@ -146,7 +146,7 @@ contract VaultStrategy is
         emit Deposit(caller, receiver, assets, shares);
     }
 
-    function _withdrawFunds(uint256 amount) internal {
+    function _withdrawFunds(uint256 amount) internal returns (uint256 withdrawnAmount) {
         console.log("withdrawing funds");
         uint256 maxWithdrawable = getMaxWithdrawableAmount();
         console.log("maxWithdrawable", maxWithdrawable);
@@ -155,6 +155,7 @@ contract VaultStrategy is
             // Normal flow for amounts within maxWithdrawable
             console.log("withdrawing from Aave");
             aavePool.withdraw(asset(), amount, address(this));
+            withdrawnAmount = amount;
 
             // Check and rebalance if necessary
             uint256 healthFactor = calculateHealthFactor();
@@ -169,16 +170,21 @@ contract VaultStrategy is
             console.log("withdrawing more than maxWithdrawable");
             // Handle case where amount exceeds maxWithdrawable
             aavePool.withdraw(asset(), maxWithdrawable, address(this));
+            withdrawnAmount = maxWithdrawable;
             console.log("withdrew from Aave");
             uint256 additionalAmountNeeded = amount - maxWithdrawable;
             console.log("additionalAmountNeeded", additionalAmountNeeded);
             _rebalancePosition(additionalAmountNeeded);
-
+            console.log("rebalanced position");
             // After rebalancing, try to withdraw any remaining amount
             uint256 newMaxWithdrawable = getMaxWithdrawableAmount();
+            console.log("newMaxWithdrawable", newMaxWithdrawable);
             uint256 remainingWithdrawal = Math.min(additionalAmountNeeded, newMaxWithdrawable);
+            console.log("remainingWithdrawal", remainingWithdrawal);
             if (remainingWithdrawal > 0) {
+                console.log("withdrawing remaining amount");
                 aavePool.withdraw(asset(), remainingWithdrawal, address(this));
+                withdrawnAmount += remainingWithdrawal;
             }
         }
 
@@ -257,9 +263,12 @@ contract VaultStrategy is
         console.log("lpTokensToBurn", lpTokensToBurn);
         IERC20(address(aerodromePool)).transfer(address(aerodromePool), lpTokensToBurn);
         (uint256 usdc, uint256 aero) = aerodromePool.burn(address(this));
+        console.log("usdc received", usdc);
+        console.log("aero received", aero);
 
         // Swap USDC and AERO to cbETH
         uint256 cbEthReceived = _swapUSDCAndAEROToCbETH(usdc, aero);
+        console.log("cbEthReceived", cbEthReceived);
 
         // Repay cbETH debt
         IERC20(cbETH).approve(address(aavePool), cbEthReceived);
@@ -776,11 +785,11 @@ contract VaultStrategy is
         _burn(owner, shares);
 
         // Directly withdraw funds
-        _withdrawFunds(assets);
+        uint256 withdrawnAmount = _withdrawFunds(assets);
 
         // Transfer assets to receiver
-        SafeERC20.safeTransfer(IERC20(asset()), receiver, assets);
+        SafeERC20.safeTransfer(IERC20(asset()), receiver, withdrawnAmount);
 
-        emit Withdraw(caller, receiver, owner, assets, shares);
+        emit Withdraw(caller, receiver, owner, withdrawnAmount, shares);
     }
 }
