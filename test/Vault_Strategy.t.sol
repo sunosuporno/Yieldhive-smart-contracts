@@ -528,7 +528,7 @@ contract Vault_StrategyTest is Test {
 
     function testVariousDeposits() public {
         uint256[] memory amounts = new uint256[](3);
-        amounts[0] = 35e6; // Minimum (10 USDC instead of 1)
+        amounts[0] = 35e6; // Minimum (35 USDC instead of 1)
         amounts[1] = 25_000e6; // Mid-range
         amounts[2] = 50_000e6; // Maximum for our test environment
 
@@ -600,5 +600,37 @@ contract Vault_StrategyTest is Test {
             // Reset for next iteration
             vm.deal(user, 0);
         }
+    }
+
+    function testDoubleWithdraw() public {
+        // Initial deposit
+        uint256 depositAmount = 100_000_000; // 100 USDC
+
+        vm.startPrank(user);
+        vaultStrategy.deposit(depositAmount, user);
+
+        // First withdrawal (full amount)
+        vaultStrategy.withdraw(depositAmount, user, user);
+
+        // Verify state after full withdrawal
+        assertEq(vaultStrategy.balanceOf(user), 0, "User should have no shares after full withdrawal");
+        assertEq(vaultStrategy.totalSupply(), 0, "Total supply should be zero after full withdrawal");
+
+        // Try to withdraw again
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ERC4626Upgradeable.ERC4626ExceededMaxWithdraw.selector,
+                user,
+                depositAmount, // Trying to withdraw the same amount again
+                0 // But max withdrawable is 0 since user has no shares
+            )
+        );
+        vaultStrategy.withdraw(depositAmount, user, user);
+
+        vm.stopPrank();
+
+        // Verify state hasn't changed after failed withdrawal
+        assertEq(vaultStrategy.balanceOf(user), 0, "User shares should still be zero");
+        assertEq(vaultStrategy.totalSupply(), 0, "Total supply should still be zero");
     }
 }
