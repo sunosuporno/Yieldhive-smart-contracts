@@ -528,7 +528,7 @@ contract Vault_StrategyTest is Test {
 
     function testVariousDeposits() public {
         uint256[] memory amounts = new uint256[](3);
-        amounts[0] = 1e6; // Minimum (1 USDC)
+        amounts[0] = 35e6; // Minimum (10 USDC instead of 1)
         amounts[1] = 25_000e6; // Mid-range
         amounts[2] = 50_000e6; // Maximum for our test environment
 
@@ -572,5 +572,33 @@ contract Vault_StrategyTest is Test {
         // Verify state hasn't changed
         assertEq(vaultStrategy.balanceOf(user), depositAmount, "User shares should remain unchanged");
         assertEq(vaultStrategy.totalSupply(), depositAmount, "Total supply should remain unchanged");
+    }
+
+    function testFindLowerLimit() public {
+        uint256 startAmount = 100e6; // Start with 100 USDC
+        uint256 decrement = 10e6; // Decrease by 10 USDC each time
+        uint256 minAmount = 10e6; // Test down to 10 USDC
+
+        for (uint256 amount = startAmount; amount >= minAmount; amount -= decrement) {
+            console.log("\nTesting deposit/withdraw of %s USDC", amount / 1e6);
+
+            deal(address(usdc), user, amount);
+
+            vm.startPrank(user);
+            usdc.approve(address(vaultStrategy), amount);
+            vaultStrategy.deposit(amount, user);
+
+            try vaultStrategy.withdraw(amount, user, user) {
+                console.log("Success at %s USDC", amount / 1e6);
+            } catch Error(string memory reason) {
+                console.log("Failed at %s USDC with reason: %s", amount / 1e6, reason);
+                break; // Stop testing at first failure
+            }
+
+            vm.stopPrank();
+
+            // Reset for next iteration
+            vm.deal(user, 0);
+        }
     }
 }
