@@ -796,4 +796,40 @@ contract Vault_StrategyTest is Test {
         assertEq(vaultStrategy.balanceOf(user), depositAmount, "User balance should remain unchanged");
         assertEq(vaultStrategy.balanceOf(randomUser), 0, "Random user should have no shares");
     }
+
+    function testWithdrawOnBehalf() public {
+        // Setup: User1 deposits funds
+        uint256 depositAmount = 100_000_000; // 100 USDC
+        vm.prank(user);
+        vaultStrategy.deposit(depositAmount, user);
+
+        // Create a second user who will withdraw on behalf
+        address authorizedUser = makeAddr("authorizedUser");
+
+        // Initial state checks
+        assertEq(vaultStrategy.balanceOf(user), depositAmount, "Initial user balance incorrect");
+        assertEq(vaultStrategy.balanceOf(authorizedUser), 0, "Authorized user should have no initial balance");
+
+        // User approves authorizedUser to spend their shares
+        vm.prank(user);
+        vaultStrategy.approve(authorizedUser, depositAmount);
+
+        // AuthorizedUser withdraws on behalf of the original user
+        vm.prank(authorizedUser);
+        vaultStrategy.withdraw(
+            depositAmount, // amount to withdraw
+            authorizedUser, // recipient of the assets
+            user // owner of the shares
+        );
+
+        // Verify final state
+        assertEq(vaultStrategy.balanceOf(user), 0, "User should have no remaining shares");
+        assertApproxEqRel(
+            usdc.balanceOf(authorizedUser),
+            depositAmount,
+            0.01e18, // 1% tolerance
+            "Authorized user should have received the assets"
+        );
+        assertEq(vaultStrategy.allowance(user, authorizedUser), 0, "Allowance should be spent");
+    }
 }
