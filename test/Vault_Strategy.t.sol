@@ -870,4 +870,67 @@ contract Vault_StrategyTest is Test {
         assertEq(vaultStrategy.allowance(user, authorizedUser), approvedAmount, "Allowance should remain unchanged");
         assertEq(usdc.balanceOf(authorizedUser), 0, "Authorized user should not have received any assets");
     }
+
+    function testWithdrawWhenPaused() public {
+        // Setup: Initial deposit
+        uint256 depositAmount = 100 * 10 ** 6;
+        vm.prank(user);
+        vaultStrategy.deposit(depositAmount, user);
+
+        // Record initial states
+        uint256 initialUserBalance = usdc.balanceOf(user);
+        uint256 initialVaultBalance = usdc.balanceOf(address(vaultStrategy));
+        uint256 initialTotalSupply = vaultStrategy.totalSupply();
+        uint256 initialUserShares = vaultStrategy.balanceOf(user);
+
+        // Verify initial pause state
+        assertFalse(vaultStrategy.paused(), "Vault should not be paused initially");
+
+        // Test pause permissions
+        vm.prank(user);
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user));
+        vaultStrategy.pause();
+
+        // Pause the contract as owner
+        vm.prank(owner);
+        vaultStrategy.pause();
+        assertTrue(vaultStrategy.paused(), "Vault should be paused");
+
+        // Attempt withdrawal while paused
+        vm.prank(user);
+        vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
+        vaultStrategy.withdraw(depositAmount, user, user);
+
+        // Verify no state changes occurred during failed withdrawal
+        assertEq(vaultStrategy.balanceOf(user), initialUserShares, "User shares should be unchanged");
+        assertEq(usdc.balanceOf(user), initialUserBalance, "User balance should be unchanged");
+        assertEq(vaultStrategy.totalSupply(), initialTotalSupply, "Total supply should be unchanged");
+        assertEq(usdc.balanceOf(address(vaultStrategy)), initialVaultBalance, "Vault balance should be unchanged");
+
+        // Test unpause permissions
+        vm.prank(user);
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user));
+        vaultStrategy.unpause();
+
+        // Unpause the contract as owner
+        vm.prank(owner);
+        vaultStrategy.unpause();
+        assertFalse(vaultStrategy.paused(), "Vault should be unpaused");
+
+        // Verify withdrawal works after unpausing
+        vm.prank(user);
+        vaultStrategy.withdraw(depositAmount, user, user);
+
+        // Verify final state after successful withdrawal
+        assertEq(vaultStrategy.balanceOf(user), 0, "User should have no remaining shares");
+        assertApproxEqRel(
+            usdc.balanceOf(user),
+            initialUserBalance + depositAmount,
+            0.01e18, // 1% tolerance
+            "Incorrect user balance after withdrawal"
+        );
+        assertEq(
+            vaultStrategy.totalSupply(), initialTotalSupply - depositAmount, "Incorrect total supply after withdrawal"
+        );
+    }
 }
