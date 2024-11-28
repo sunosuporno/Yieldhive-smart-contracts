@@ -9,6 +9,7 @@ import {ProxyAdmin} from "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.s
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {ERC4626Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
+import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 
 contract Vault_StrategyTest is Test {
     VaultStrategy public vaultStrategy;
@@ -769,5 +770,30 @@ contract Vault_StrategyTest is Test {
             "Should have received back approximately initial balance"
         );
         assertEq(vaultStrategy.balanceOf(user), 0, "Should have no shares remaining");
+    }
+
+    function testUnauthorizedWithdraw() public {
+        // Setup: User1 deposits funds
+        uint256 depositAmount = 100_000_000; // 100 USDC
+        vm.prank(user);
+        vaultStrategy.deposit(depositAmount, user);
+
+        // Create a random user who has no deposits or approvals
+        address randomUser = makeAddr("randomUser");
+
+        // Attempt unauthorized withdrawal
+        vm.startPrank(randomUser);
+
+        // Should revert with ERC20InsufficientAllowance error
+        vm.expectRevert(
+            abi.encodeWithSelector(IERC20Errors.ERC20InsufficientAllowance.selector, randomUser, 0, depositAmount)
+        );
+        vaultStrategy.withdraw(depositAmount, randomUser, user);
+
+        vm.stopPrank();
+
+        // Verify state remains unchanged
+        assertEq(vaultStrategy.balanceOf(user), depositAmount, "User balance should remain unchanged");
+        assertEq(vaultStrategy.balanceOf(randomUser), 0, "Random user should have no shares");
     }
 }
