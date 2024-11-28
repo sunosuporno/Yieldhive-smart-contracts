@@ -208,8 +208,6 @@ contract VaultStrategy is
             }
         }
 
-        // Update total accounted assets
-        _totalAccountedAssets -= withdrawnAmount;
     }
 
     function _investFunds(uint256 amount, address assetAddress) internal {
@@ -835,6 +833,7 @@ contract VaultStrategy is
 
         // Directly withdraw funds
         uint256 withdrawnAmount = _withdrawFunds(assets);
+        _totalAccountedAssets -= assets;
 
         // Transfer assets to receiver
         SafeERC20.safeTransfer(IERC20(asset()), receiver, withdrawnAmount);

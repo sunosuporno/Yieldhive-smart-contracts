@@ -528,19 +528,27 @@ contract Vault_StrategyTest is Test {
         amounts[2] = 50_000e6; // Maximum for our test environment
 
         for (uint256 i = 0; i < amounts.length; i++) {
-            console.log("amounts[i]", amounts[i]);
+            console.log("\namounts[i]", amounts[i]);
             deal(address(usdc), user, amounts[i]);
 
             vm.startPrank(user);
             usdc.approve(address(vaultStrategy), amounts[i]);
             vaultStrategy.deposit(amounts[i], user);
             vm.stopPrank();
+            uint256 userShareBalAfterDeposit = vaultStrategy.balanceOf(user);
+            console.log("userShareBalAfterDeposit", userShareBalAfterDeposit);
 
             assertEq(vaultStrategy.balanceOf(user), amounts[i], "Deposit amount mismatch");
 
             // Reset for next iteration
             vm.prank(user);
             vaultStrategy.withdraw(amounts[i], user, user);
+            uint256 userShareBal = vaultStrategy.balanceOf(user);
+            console.log("userShareBal", userShareBal);
+            uint256 balContract = usdc.balanceOf(address(vaultStrategy));
+            console.log("balContract", balContract);
+            uint256 totalAssets = vaultStrategy.totalAssets();
+            console.log("totalAssets", totalAssets);
         }
     }
 
