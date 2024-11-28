@@ -832,4 +832,42 @@ contract Vault_StrategyTest is Test {
         );
         assertEq(vaultStrategy.allowance(user, authorizedUser), 0, "Allowance should be spent");
     }
+
+    function testWithdrawExceedingAllowance() public {
+        // Setup: User1 deposits funds
+        uint256 depositAmount = 1_000_000_000; // 1000 USDC
+        vm.prank(user);
+        vaultStrategy.deposit(depositAmount, user);
+
+        // Create a second user who will be partially authorized
+        address authorizedUser = makeAddr("authorizedUser");
+
+        // User approves authorizedUser to spend only part of their shares
+        uint256 approvedAmount = 500_000_000; // 500 USDC
+        uint256 attemptedWithdrawal = 650_000_000; // 650 USDC
+
+        vm.prank(user);
+        vaultStrategy.approve(authorizedUser, approvedAmount);
+
+        // AuthorizedUser attempts to withdraw more than approved
+        vm.startPrank(authorizedUser);
+
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IERC20Errors.ERC20InsufficientAllowance.selector, authorizedUser, approvedAmount, attemptedWithdrawal
+            )
+        );
+        vaultStrategy.withdraw(
+            attemptedWithdrawal, // trying to withdraw more than approved
+            authorizedUser, // recipient of the assets
+            user // owner of the shares
+        );
+
+        vm.stopPrank();
+
+        // Verify state remains unchanged
+        assertEq(vaultStrategy.balanceOf(user), depositAmount, "User balance should remain unchanged");
+        assertEq(vaultStrategy.allowance(user, authorizedUser), approvedAmount, "Allowance should remain unchanged");
+        assertEq(usdc.balanceOf(authorizedUser), 0, "Authorized user should not have received any assets");
+    }
 }
