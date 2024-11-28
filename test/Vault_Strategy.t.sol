@@ -64,7 +64,7 @@ contract Vault_StrategyTest is Test {
 
         // Set up USDC for the user
         usdc = IERC20(ASSET);
-        deal(address(usdc), user, 1000 * 10 ** 6); // 1000 USDC (6 decimals)
+        deal(address(usdc), user, 10000 * 10 ** 6); // 1000 USDC (6 decimals)
 
         // Approve VaultStrategy to spend user's USDC
         vm.prank(user);
@@ -77,7 +77,7 @@ contract Vault_StrategyTest is Test {
         assertEq(vaultStrategy.symbol(), SYMBOL);
         assertEq(address(vaultStrategy.asset()), ASSET);
         assertEq(vaultStrategy.owner(), owner);
-        assertEq(usdc.balanceOf(user), 1000 * 10 ** 6);
+        assertEq(usdc.balanceOf(user), 10000 * 10 ** 6);
         assertEq(usdc.allowance(user, address(vaultStrategy)), type(uint256).max);
         assertEq(address(vaultStrategy.aerodromePool()), AERODROME_POOL_CONTRACT);
     }
@@ -189,11 +189,6 @@ contract Vault_StrategyTest is Test {
         uint256 initialUserBalance = usdc.balanceOf(user);
         uint256 initialVaultBalance = usdc.balanceOf(address(vaultStrategy));
         uint256 initialTotalSupply = vaultStrategy.totalSupply();
-
-        // Setup: Give user USDC and approve vault
-        deal(address(usdc), user, 1000 * 10 ** 6);
-        vm.prank(user);
-        usdc.approve(address(vaultStrategy), type(uint256).max);
 
         // Verify initial pause state
         assertFalse(vaultStrategy.paused(), "Vault should not be paused initially");
@@ -632,5 +627,139 @@ contract Vault_StrategyTest is Test {
         // Verify state hasn't changed after failed withdrawal
         assertEq(vaultStrategy.balanceOf(user), 0, "User shares should still be zero");
         assertEq(vaultStrategy.totalSupply(), 0, "Total supply should still be zero");
+    }
+
+    function testMultiplePartialWithdrawals() public {
+        // Initial deposit
+        uint256 depositAmount = 2500e6;
+        uint256[] memory withdrawAmounts = new uint256[](3);
+        withdrawAmounts[0] = 100e6; // 100 USDC
+        withdrawAmounts[1] = 400e6; // 400 USDC
+        withdrawAmounts[2] = 530e6; // 530 USDC
+
+        // Record initial state
+        uint256 initialUserBalance = usdc.balanceOf(user);
+        console.log("initialUserBalance", initialUserBalance);
+
+        vm.startPrank(user);
+        vaultStrategy.deposit(depositAmount, user);
+
+        // Log initial LP token balance after deposit
+        console.log(
+            "\nInitial LP token balance after deposit:",
+            IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy))
+        );
+
+        // Record post-deposit state
+        uint256 remainingShares = depositAmount;
+        uint256 totalWithdrawn = 0;
+
+        // Perform multiple partial withdrawals
+        for (uint256 i = 0; i < withdrawAmounts.length; i++) {
+            console.log("\nWithdrawal %s: %s USDC", i + 1, withdrawAmounts[i] / 1e6);
+
+            // Log LP token balance before withdrawal
+            console.log(
+                "LP token balance before withdrawal:",
+                IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy))
+            );
+
+            uint256 preWithdrawBalance = usdc.balanceOf(user);
+            uint256 preWithdrawShares = vaultStrategy.balanceOf(user);
+            uint256 preWithdrawTotalSupply = vaultStrategy.totalSupply();
+            uint256 preWithdrawTotalAssets = vaultStrategy.totalAssets();
+
+            // Perform withdrawal
+            vaultStrategy.withdraw(withdrawAmounts[i], user, user);
+            totalWithdrawn += withdrawAmounts[i];
+            remainingShares -= withdrawAmounts[i];
+
+            // Log LP token balance after withdrawal
+            console.log(
+                "LP token balance after withdrawal:",
+                IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy))
+            );
+
+            // Verify user's USDC balance increased by withdrawal amount
+            assertEq(
+                usdc.balanceOf(user), preWithdrawBalance + withdrawAmounts[i], "Incorrect USDC balance after withdrawal"
+            );
+
+            // Verify user's share balance decreased by withdrawal amount
+            assertEq(
+                vaultStrategy.balanceOf(user),
+                preWithdrawShares - withdrawAmounts[i],
+                "Incorrect share balance after withdrawal"
+            );
+
+            // Verify total supply decreased by withdrawal amount
+            assertEq(
+                vaultStrategy.totalSupply(),
+                preWithdrawTotalSupply - withdrawAmounts[i],
+                "Incorrect total supply after withdrawal"
+            );
+
+            // Verify total assets decreased by withdrawal amount
+            assertEq(
+                vaultStrategy.totalAssets(),
+                preWithdrawTotalAssets - withdrawAmounts[i],
+                "Incorrect total assets after withdrawal"
+            );
+
+            // Verify remaining shares matches expected
+            assertEq(vaultStrategy.balanceOf(user), remainingShares, "Incorrect remaining shares");
+
+            console.log("Remaining shares: %s", remainingShares / 1e6);
+            console.log("Total withdrawn so far: %s USDC", totalWithdrawn / 1e6);
+        }
+
+        vm.stopPrank();
+
+        // Final state verification
+        console.log("\nFinal State Verification:");
+        console.log("User USDC balance:", usdc.balanceOf(user) / 1e6, "USDC");
+        console.log("Expected balance:", (initialUserBalance - depositAmount + totalWithdrawn) / 1e6, "USDC");
+        console.log(
+            "LP tokens balance:", IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy))
+        );
+
+        assertEq(
+            usdc.balanceOf(user), initialUserBalance - depositAmount + totalWithdrawn, "Final USDC balance incorrect"
+        );
+
+        console.log("User shares:", vaultStrategy.balanceOf(user) / 1e6, "shares");
+        console.log("Expected shares:", (depositAmount - totalWithdrawn) / 1e6, "shares");
+
+        assertEq(vaultStrategy.balanceOf(user), depositAmount - totalWithdrawn, "Final shares balance incorrect");
+
+        // Verify we can still withdraw remaining balance
+        uint256 remainingBalance = depositAmount - totalWithdrawn;
+        console.log("\nFinal Withdrawal:");
+        console.log("Remaining balance to withdraw:", remainingBalance / 1e6, "USDC");
+        console.log(
+            "LP tokens before final withdrawal:",
+            IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy))
+        );
+
+        vm.startPrank(user);
+        vaultStrategy.withdraw(remainingBalance, user, user);
+        vm.stopPrank();
+
+        // Verify final state after complete withdrawal
+        console.log("\nPost-Final Withdrawal State:");
+        console.log("Final user USDC balance:", usdc.balanceOf(user) / 1e6, "USDC");
+        console.log("Initial user USDC balance:", initialUserBalance / 1e6, "USDC");
+        console.log("Final shares balance:", vaultStrategy.balanceOf(user));
+        console.log(
+            "Final LP tokens balance:", IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy))
+        );
+
+        assertApproxEqRel(
+            usdc.balanceOf(user),
+            initialUserBalance,
+            0.01e18, // 1% tolerance
+            "Should have received back approximately initial balance"
+        );
+        assertEq(vaultStrategy.balanceOf(user), 0, "Should have no shares remaining");
     }
 }

@@ -57,8 +57,8 @@ contract VaultStrategy is
     uint256 public previousVariableDebtBalance;
 
     // Define the target health factor with 4 decimal places
-    uint256 public constant TARGET_HEALTH_FACTOR = 11000; // 1.1 with 4 decimal places
-    uint256 public constant HEALTH_FACTOR_BUFFER = 500; // 0.05 with 4 decimal places
+    uint256 public constant TARGET_HEALTH_FACTOR = 10300; // 1.03 with 4 decimal places
+    uint256 public constant HEALTH_FACTOR_BUFFER = 300; // 0.03 with 4 decimal places
 
     bytes32 public constant REBALANCER_ROLE = keccak256("REBALANCER_ROLE");
 
@@ -152,14 +152,19 @@ contract VaultStrategy is
         console.log("maxWithdrawable", maxWithdrawable);
 
         if (amount <= maxWithdrawable) {
-            // Normal flow for amounts within maxWithdrawable
+            // Get balance before withdrawal
+            uint256 balanceBefore = IERC20(asset()).balanceOf(address(this));
+
             console.log("withdrawing from Aave");
             aavePool.withdraw(asset(), amount, address(this));
-            withdrawnAmount = amount;
+
+            // Calculate actual withdrawn amount
+            withdrawnAmount = IERC20(asset()).balanceOf(address(this)) - balanceBefore;
 
             // Check and rebalance if necessary
             uint256 healthFactor = calculateHealthFactor();
             uint256 currentHealthFactor4Dec = healthFactor / 1e14;
+            console.log("currentHealthFactor4Dec", currentHealthFactor4Dec);
             uint256 bufferedTargetHealthFactor = TARGET_HEALTH_FACTOR + HEALTH_FACTOR_BUFFER;
             console.log("currentHealthFactor4Dec", currentHealthFactor4Dec);
             if (currentHealthFactor4Dec < bufferedTargetHealthFactor) {
@@ -168,14 +173,21 @@ contract VaultStrategy is
             }
         } else {
             console.log("withdrawing more than maxWithdrawable");
-            // Handle case where amount exceeds maxWithdrawable
-            aavePool.withdraw(asset(), maxWithdrawable, address(this));
-            withdrawnAmount = maxWithdrawable;
+            // Get balance before withdrawal
+            uint256 balanceBefore = IERC20(asset()).balanceOf(address(this));
+
+            aavePool.withdraw(asset(), (maxWithdrawable * 98 / 100), address(this));
+
+            // Calculate actual withdrawn amount
+            withdrawnAmount = IERC20(asset()).balanceOf(address(this)) - balanceBefore;
+
+            console.log("withdrawnAmount", withdrawnAmount);
             console.log("withdrew from Aave");
-            uint256 additionalAmountNeeded = amount - maxWithdrawable;
+            uint256 additionalAmountNeeded = amount - withdrawnAmount;
             console.log("additionalAmountNeeded", additionalAmountNeeded);
             _rebalancePosition(additionalAmountNeeded);
             console.log("rebalanced position");
+
             // After rebalancing, try to withdraw any remaining amount
             uint256 newMaxWithdrawable = getMaxWithdrawableAmount();
             console.log("newMaxWithdrawable", newMaxWithdrawable);
@@ -183,13 +195,21 @@ contract VaultStrategy is
             console.log("remainingWithdrawal", remainingWithdrawal);
             if (remainingWithdrawal > 0) {
                 console.log("withdrawing remaining amount");
+                balanceBefore = IERC20(asset()).balanceOf(address(this));
+
                 aavePool.withdraw(asset(), remainingWithdrawal, address(this));
-                withdrawnAmount += remainingWithdrawal;
+
+                // Add actual withdrawn amount to previous withdrawnAmount
+                withdrawnAmount += IERC20(asset()).balanceOf(address(this)) - balanceBefore;
+
+                console.log("withdrawn remaining amount", withdrawnAmount);
+                uint256 balanceofContract = IERC20(asset()).balanceOf(address(this));
+                console.log("balanceofContract", balanceofContract);
             }
         }
 
         // Update total accounted assets
-        _totalAccountedAssets -= amount;
+        _totalAccountedAssets -= withdrawnAmount;
     }
 
     function _investFunds(uint256 amount, address assetAddress) internal {
@@ -230,6 +250,12 @@ contract VaultStrategy is
     }
 
     function _rebalancePosition(uint256 additionalAmountNeeded) internal {
+        // Only proceed with rebalancing if we actually need additional funds
+        if (additionalAmountNeeded == 0) {
+            console.log("No rebalancing needed - sufficient funds in Aave");
+            return;
+        }
+
         address[] memory dataFeedAddresses = new address[](3);
         dataFeedAddresses[0] = cbEthUsdDataFeedAddress;
         dataFeedAddresses[1] = usdcUsdDataFeedAddress;
@@ -239,43 +265,65 @@ contract VaultStrategy is
         uint256 usdcPriceInUsd = prices[1];
         uint256 aeroPriceInUsd = prices[2];
 
-        uint256 amountToFreeUp = additionalAmountNeeded > 0 ? additionalAmountNeeded : 0;
+        uint256 amountToFreeUp = additionalAmountNeeded;
+        console.log("amountToFreeUp", amountToFreeUp);
 
-        if (amountToFreeUp == 0) {
-            // Original rebalancing logic
-            (uint256 totalCollateralBase, uint256 totalDebtBase,, uint256 currentLiquidationThreshold,,) =
-                aavePool.getUserAccountData(address(this));
+        // Check if we need to rebalance for health factor
+        (uint256 totalCollateralBase, uint256 totalDebtBase,, uint256 currentLiquidationThreshold,,) =
+            aavePool.getUserAccountData(address(this));
 
-            uint256 bufferedTargetHealthFactor = TARGET_HEALTH_FACTOR + HEALTH_FACTOR_BUFFER;
+        console.log("totalCollateralBase", totalCollateralBase);
+        console.log("totalDebtBase", totalDebtBase);
+        console.log("currentLiquidationThreshold", currentLiquidationThreshold);
 
-            amountToFreeUp =
-                totalDebtBase - (totalCollateralBase * currentLiquidationThreshold) / bufferedTargetHealthFactor;
+        uint256 bufferedTargetHealthFactor = TARGET_HEALTH_FACTOR + HEALTH_FACTOR_BUFFER;
+        console.log("bufferedTargetHealthFactor", bufferedTargetHealthFactor);
+
+        // Fix: Adjust calculation order and decimal handling
+        uint256 healthFactorAdjustment = (
+            (totalDebtBase * bufferedTargetHealthFactor) - (totalCollateralBase * currentLiquidationThreshold)
+        ) / (bufferedTargetHealthFactor * 100);
+
+        // If health factor needs adjustment, add it to amount to free up
+        if (healthFactorAdjustment > 0) {
+            console.log("Additional rebalancing needed for health factor:", healthFactorAdjustment);
+            amountToFreeUp += healthFactorAdjustment;
+            console.log("amountToFreeUp after health factor adjustment", amountToFreeUp);
         }
 
-        uint256 cbEthEquivalent = (amountToFreeUp * 1e18 * usdcPriceInUsd) / (cbEthPriceInUsd * 1e6);
-        console.log("cbEthEquivalent", cbEthEquivalent);
+        // Only proceed with LP operations if we need to free up funds
+        if (amountToFreeUp > 0) {
+            uint256 cbEthEquivalent = (amountToFreeUp * 1e18 * usdcPriceInUsd) / (cbEthPriceInUsd * 1e6);
+            console.log("cbEthEquivalent", cbEthEquivalent);
 
-        // Convert cbEthEquivalent to USD value with 8 decimals
-        uint256 cbEthValueInUsd = (cbEthEquivalent * cbEthPriceInUsd) / 1e18;
+            // Convert cbEthEquivalent to USD value with 8 decimals
+            uint256 cbEthValueInUsd = (cbEthEquivalent * cbEthPriceInUsd) / 1e18;
+            console.log("cbEthValueInUsd", cbEthValueInUsd);
 
-        // Calculate how much to withdraw from Aerodrome Pool
-        uint256 lpTokensToBurn = _calculateLPTokensToWithdraw(cbEthValueInUsd, usdcPriceInUsd, aeroPriceInUsd);
-        console.log("lpTokensToBurn", lpTokensToBurn);
-        IERC20(address(aerodromePool)).transfer(address(aerodromePool), lpTokensToBurn);
-        (uint256 usdc, uint256 aero) = aerodromePool.burn(address(this));
-        console.log("usdc received", usdc);
-        console.log("aero received", aero);
+            // Calculate how much to withdraw from Aerodrome Pool
+            uint256 lpTokensToBurn = _calculateLPTokensToWithdraw(cbEthValueInUsd, usdcPriceInUsd, aeroPriceInUsd);
+            console.log("lpTokensToBurn", lpTokensToBurn);
 
-        // Swap USDC and AERO to cbETH
-        uint256 cbEthReceived = _swapUSDCAndAEROToCbETH(usdc, aero);
-        console.log("cbEthReceived", cbEthReceived);
+            if (lpTokensToBurn > 0) {
+                IERC20(address(aerodromePool)).transfer(address(aerodromePool), lpTokensToBurn);
+                (uint256 usdc, uint256 aero) = aerodromePool.burn(address(this));
+                console.log("usdc received", usdc);
+                console.log("aero received", aero);
 
-        // Repay cbETH debt
-        IERC20(cbETH).approve(address(aavePool), cbEthReceived);
-        aavePool.repay(cbETH, cbEthReceived, 2, address(this));
+                // Swap USDC and AERO to cbETH
+                uint256 cbEthReceived = _swapUSDCAndAEROToCbETH(usdc, aero);
+                console.log("cbEthReceived", cbEthReceived);
 
-        // Emit the rebalancing event
-        emit PositionRebalanced(additionalAmountNeeded, amountToFreeUp, lpTokensToBurn, usdc, aero, cbEthReceived);
+                // Repay cbETH debt
+                IERC20(cbETH).approve(address(aavePool), cbEthReceived);
+                aavePool.repay(cbETH, cbEthReceived, 2, address(this));
+
+                // Emit the rebalancing event
+                emit PositionRebalanced(
+                    additionalAmountNeeded, amountToFreeUp, lpTokensToBurn, usdc, aero, cbEthReceived
+                );
+            }
+        }
     }
 
     function calculateHealthFactor() internal view returns (uint256) {
@@ -344,12 +392,13 @@ contract VaultStrategy is
         uint256 totalSupplyPoolToken = IERC20(address(aerodromePool)).totalSupply();
         console.log("totalSupplyPoolToken", totalSupplyPoolToken);
         uint256 ourLPBalance = IERC20(address(aerodromePool)).balanceOf(address(this));
-
+        console.log("ourLPBalance", ourLPBalance);
         // Calculate the total pool value in USD
         uint256 usdcValueInPool = (reserve0 * usdcPriceInUsd) / 1e6; // USDC has 6 decimals
         uint256 aeroValueInPool = (reserve1 * aeroPriceInUsd) / 1e18; // AERO has 18 decimals
 
         uint256 totalPoolValueInUsd = usdcValueInPool + aeroValueInPool;
+        console.log("totalPoolValueInUsd", totalPoolValueInUsd);
 
         uint256 halfCbEthValueInUsd = cbEthValueInUsd / 2;
         console.log("halfCbEthValueInUsd", halfCbEthValueInUsd);
