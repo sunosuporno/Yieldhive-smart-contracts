@@ -528,7 +528,7 @@ contract VaultStrategy is
         if (totalRewardsInUSDC > 0) {
             // swap all rewards to USDC
             uint256 aeroBal = IERC20(AERO).balanceOf(address(this));
-            _swapAEROToUSDC(aeroBal);
+            if (aeroBal > 0) _swapAEROToUSDC(aeroBal);
             uint256 usdcBalance = IERC20(asset()).balanceOf(address(this));
             _investFunds(usdcBalance, address(asset()));
         }

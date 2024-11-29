@@ -1097,8 +1097,6 @@ contract Vault_StrategyTest is Test {
         assertGt(vaultStrategy.accumulatedStrategistFee(), 0, "Should have accumulated strategist fee");
     }
 
-    // ... existing code ...
-
     function testHarvestReinvestAndReportWithLoss() public {
         // Initial setup - deposit 10,000 USDC
         uint256 depositAmount = 10_000e6; // 10,000 USDC
@@ -1186,5 +1184,149 @@ contract Vault_StrategyTest is Test {
 
         // Verify no strategist fee was accumulated (since there was a loss)
         assertEq(vaultStrategy.accumulatedStrategistFee(), 0, "Should not have accumulated strategist fee");
+    }
+
+    function testConsecutiveHarvestsWithAlternatingRewards() public {
+        // Initial setup - deposit 10,000 USDC
+        uint256 depositAmount = 10_000e6; // 10,000 USDC
+        deal(address(usdc), user, depositAmount);
+
+        vm.startPrank(user);
+        usdc.approve(address(vaultStrategy), depositAmount);
+        vaultStrategy.deposit(depositAmount, user);
+        vm.stopPrank();
+
+        // Get actual initial balances after deposit
+        uint256 initialAUSDCBalance = IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy));
+        uint256 initialDebtBalance = IERC20(vaultStrategy.variableDebtCbETH()).balanceOf(address(vaultStrategy));
+
+        console.log("\n=== Initial State ===");
+        console.log("Initial aUSDC Balance:", initialAUSDCBalance);
+        console.log("Initial Debt Balance:", initialDebtBalance);
+
+        // First Harvest (with zero USDC rewards) =====================
+        console.log("\n=== First Harvest (Zero USDC Rewards) ===");
+
+        // Fast forward 15 days
+        vm.warp(block.timestamp + 15 days);
+
+        // Mock aUSDC balance increase (15% APY)
+        uint256 increaseInSupply1 = (initialAUSDCBalance * 15) / (24 * 100); // Half-monthly rate
+        uint256 newAUSDCBalance1 = initialAUSDCBalance + increaseInSupply1;
+        console.log("aUSDC interest earned (1st):", newAUSDCBalance1 - initialAUSDCBalance);
+        vm.mockCall(
+            vaultStrategy.aUSDC(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            abi.encode(newAUSDCBalance1)
+        );
+
+        // Mock variable debt balance (2.5% APY for cbETH borrow)
+        uint256 increaseInDebt1 = (initialDebtBalance * 25) / (24 * 1000); // Half-monthly rate
+        uint256 newDebtBalance1 = initialDebtBalance + increaseInDebt1;
+        console.log("cbETH debt increase (1st):", newDebtBalance1 - initialDebtBalance);
+        vm.mockCall(
+            vaultStrategy.variableDebtCbETH(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            abi.encode(newDebtBalance1)
+        );
+
+        // Get prices from Chainlink
+        address[] memory dataFeeds = new address[](3);
+        dataFeeds[0] = vaultStrategy.cbEthUsdDataFeedAddress();
+        dataFeeds[1] = vaultStrategy.usdcUsdDataFeedAddress();
+        dataFeeds[2] = vaultStrategy.aeroUsdDataFeedAddress();
+        uint256[] memory prices = vaultStrategy.getChainlinkDataFeedLatestAnswer(dataFeeds);
+
+        // Calculate rewards (only AERO, no USDC)
+        uint256 monthlyRewardValue1 = (depositAmount * 45) / (24 * 100); // Half-month reward
+        uint256 aeroRewards1 = ((monthlyRewardValue1) * prices[1] * 1e18) / (prices[2] * 1e6);
+        console.log("First harvest AERO rewards:", aeroRewards1);
+        console.log("First harvest USDC rewards: 0");
+
+        // Setup mock for claimFees (zero USDC rewards)
+        vm.mockCall(
+            address(vaultStrategy.aerodromePool()),
+            abi.encodeWithSelector(IPool.claimFees.selector),
+            abi.encode(0, aeroRewards1)
+        );
+
+        // Mock AERO balance
+        deal(address(vaultStrategy.AERO()), address(vaultStrategy), aeroRewards1);
+
+        // Record state and perform first harvest
+        uint256 totalAssetsBeforeFirst = vaultStrategy.totalAssets();
+        console.log("Total assets before first harvest:", totalAssetsBeforeFirst);
+
+        vm.prank(owner);
+        vaultStrategy.harvestReinvestAndReport();
+
+        uint256 totalAssetsAfterFirst = vaultStrategy.totalAssets();
+        console.log("Total assets after first harvest:", totalAssetsAfterFirst);
+        console.log("Asset change (first):", int256(totalAssetsAfterFirst) - int256(totalAssetsBeforeFirst));
+
+        // Second Harvest (with zero AERO rewards) =====================
+        console.log("\n=== Second Harvest (Zero AERO Rewards) ===");
+
+        // Fast forward another 15 days
+        vm.warp(block.timestamp + 15 days);
+
+        // Mock aUSDC balance increase for second period
+        uint256 increaseInSupply2 = (newAUSDCBalance1 * 15) / (24 * 100);
+        uint256 newAUSDCBalance2 = newAUSDCBalance1 + increaseInSupply2;
+        console.log("aUSDC interest earned (2nd):", newAUSDCBalance2 - newAUSDCBalance1);
+        vm.mockCall(
+            vaultStrategy.aUSDC(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            abi.encode(newAUSDCBalance2)
+        );
+
+        // Mock variable debt balance increase for second period
+        uint256 increaseInDebt2 = (newDebtBalance1 * 25) / (24 * 1000);
+        uint256 newDebtBalance2 = newDebtBalance1 + increaseInDebt2;
+        console.log("cbETH debt increase (2nd):", newDebtBalance2 - newDebtBalance1);
+        vm.mockCall(
+            vaultStrategy.variableDebtCbETH(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            abi.encode(newDebtBalance2)
+        );
+
+        // Calculate rewards (only USDC, no AERO)
+        uint256 monthlyRewardValue2 = (depositAmount * 45) / (24 * 100);
+        uint256 usdcRewards2 = monthlyRewardValue2;
+        console.log("Second harvest AERO rewards: 0");
+        console.log("Second harvest USDC rewards:", usdcRewards2);
+
+        // Setup mock for claimFees (zero AERO rewards)
+        vm.mockCall(
+            address(vaultStrategy.aerodromePool()),
+            abi.encodeWithSelector(IPool.claimFees.selector),
+            abi.encode(usdcRewards2, 0)
+        );
+
+        // Mock USDC balance
+        deal(address(usdc), address(vaultStrategy), usdcRewards2);
+
+        // Record state and perform second harvest
+        uint256 totalAssetsBeforeSecond = vaultStrategy.totalAssets();
+        console.log("Total assets before second harvest:", totalAssetsBeforeSecond);
+
+        vm.prank(owner);
+        vaultStrategy.harvestReinvestAndReport();
+
+        uint256 totalAssetsAfterSecond = vaultStrategy.totalAssets();
+        console.log("Total assets after second harvest:", totalAssetsAfterSecond);
+        console.log("Asset change (second):", int256(totalAssetsAfterSecond) - int256(totalAssetsBeforeSecond));
+
+        // Final assertions
+        assertGt(totalAssetsAfterFirst, totalAssetsBeforeFirst, "First harvest should increase total assets");
+        assertGt(totalAssetsAfterSecond, totalAssetsBeforeSecond, "Second harvest should increase total assets");
+        assertGt(vaultStrategy.accumulatedStrategistFee(), 0, "Should have accumulated strategist fees");
+
+        // Compare the two harvests
+        uint256 firstHarvestGain = totalAssetsAfterFirst - totalAssetsBeforeFirst;
+        uint256 secondHarvestGain = totalAssetsAfterSecond - totalAssetsBeforeSecond;
+        console.log("\n=== Harvest Comparison ===");
+        console.log("First harvest gain:", firstHarvestGain);
+        console.log("Second harvest gain:", secondHarvestGain);
     }
 }
