@@ -1459,4 +1459,39 @@ contract Vault_StrategyTest is Test {
             "Assets received should match expected amount"
         );
     }
+
+    function testUnauthorizedHarvestAttempt() public {
+        // Initial setup - deposit 10,000 USDC
+        uint256 depositAmount = 10_000e6;
+        deal(address(usdc), user, depositAmount);
+
+        vm.startPrank(user);
+        usdc.approve(address(vaultStrategy), depositAmount);
+        vaultStrategy.deposit(depositAmount, user);
+        vm.stopPrank();
+
+        // Fast forward time
+        vm.warp(block.timestamp + 30 days);
+
+        // Mock some yields to make sure there's something to harvest
+        uint256 initialAUSDCBalance = IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy));
+        uint256 newAUSDCBalance = initialAUSDCBalance + (initialAUSDCBalance * 15) / (12 * 100);
+        vm.mockCall(
+            vaultStrategy.aUSDC(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            abi.encode(newAUSDCBalance)
+        );
+
+        // Record state before attempted harvest
+        uint256 totalAssetsBefore = vaultStrategy.totalAssets();
+
+        // Attempt harvest as unauthorized user
+        vm.prank(user);
+        vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user));
+        vaultStrategy.harvestReinvestAndReport();
+
+        // Verify no state changes occurred
+        assertEq(vaultStrategy.totalAssets(), totalAssetsBefore, "Total assets should remain unchanged");
+        assertEq(vaultStrategy.accumulatedStrategistFee(), 0, "No strategist fee should be accumulated");
+    }
 }
