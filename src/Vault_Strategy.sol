@@ -176,7 +176,7 @@ contract VaultStrategy is
             // Get balance before withdrawal
             uint256 balanceBefore = IERC20(asset()).balanceOf(address(this));
 
-            aavePool.withdraw(asset(), (maxWithdrawable * 98 / 100), address(this));
+            aavePool.withdraw(asset(), (maxWithdrawable - 10), address(this));
 
             // Calculate actual withdrawn amount
             withdrawnAmount = IERC20(asset()).balanceOf(address(this)) - balanceBefore;
@@ -197,7 +197,7 @@ contract VaultStrategy is
                 console.log("withdrawing remaining amount");
                 balanceBefore = IERC20(asset()).balanceOf(address(this));
 
-                aavePool.withdraw(asset(), remainingWithdrawal, address(this));
+                aavePool.withdraw(asset(), (remainingWithdrawal - 10), address(this));
 
                 // Add actual withdrawn amount to previous withdrawnAmount
                 withdrawnAmount += IERC20(asset()).balanceOf(address(this)) - balanceBefore;
@@ -207,7 +207,6 @@ contract VaultStrategy is
                 console.log("balanceofContract", balanceofContract);
             }
         }
-
     }
 
     function _investFunds(uint256 amount, address assetAddress) internal {

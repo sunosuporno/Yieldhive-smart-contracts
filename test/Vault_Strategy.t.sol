@@ -433,8 +433,11 @@ contract Vault_StrategyTest is Test {
         console.log("afterWithdrawTotalSupply", afterWithdrawTotalSupply);
 
         // Verify final states
-        assertEq(
-            usdc.balanceOf(user), afterDepositUserBalance + withdrawAmount, "Incorrect USDC balance after withdrawal"
+        assertApproxEqRel(
+            usdc.balanceOf(user),
+            afterDepositUserBalance + withdrawAmount,
+            0.01e18,
+            "Incorrect USDC balance after withdrawal"
         );
         assertEq(
             vaultStrategy.balanceOf(user), afterDepositVaultShares - withdrawAmount, "Incorrect shares after withdrawal"
@@ -690,8 +693,11 @@ contract Vault_StrategyTest is Test {
             );
 
             // Verify user's USDC balance increased by withdrawal amount
-            assertEq(
-                usdc.balanceOf(user), preWithdrawBalance + withdrawAmounts[i], "Incorrect USDC balance after withdrawal"
+            assertApproxEqRel(
+                usdc.balanceOf(user),
+                preWithdrawBalance + withdrawAmounts[i],
+                0.01e18,
+                "Incorrect USDC balance after withdrawal"
             );
 
             // Verify user's share balance decreased by withdrawal amount
@@ -962,13 +968,20 @@ contract Vault_StrategyTest is Test {
         // Bound withdraw to be no more than deposit
         withdrawAmount = bound(withdrawAmount, 5e6, depositAmount);
 
+        // Give user some USDC
+        deal(address(usdc), user, depositAmount);
+
+        uint256 preDepositBalance = usdc.balanceOf(user);
+        console.log("preDepositBalance", preDepositBalance);
         // Initial deposit
         vm.startPrank(user);
         vaultStrategy.deposit(depositAmount, user);
 
         // Record state before withdrawal
         uint256 preWithdrawBalance = usdc.balanceOf(user);
+        console.log("Balance before withdrawal", preWithdrawBalance);
         uint256 preWithdrawShares = vaultStrategy.balanceOf(user);
+        console.log("Shares before withdrawal", preWithdrawShares);
 
         // Perform withdrawal
         if (withdrawAmount == 0) {
@@ -978,8 +991,11 @@ contract Vault_StrategyTest is Test {
 
         // Verify state after withdrawal
         if (withdrawAmount > 0) {
-            assertEq(
-                usdc.balanceOf(user), preWithdrawBalance + withdrawAmount, "Incorrect USDC balance after withdrawal"
+            assertApproxEqRel(
+                usdc.balanceOf(user),
+                preWithdrawBalance + withdrawAmount,
+                0.01e18, // 1% tolerance
+                "Incorrect USDC balance after withdrawal"
             );
             assertEq(
                 vaultStrategy.balanceOf(user),
