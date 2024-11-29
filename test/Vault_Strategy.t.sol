@@ -1329,4 +1329,134 @@ contract Vault_StrategyTest is Test {
         console.log("First harvest gain:", firstHarvestGain);
         console.log("Second harvest gain:", secondHarvestGain);
     }
+
+    function testFullFlowDepositHarvestWithdraw() public {
+        // Initial setup - deposit 10,000 USDC
+        uint256 depositAmount = 10_000e6; // 10,000 USDC
+        deal(address(usdc), user, depositAmount);
+
+        console.log("\n=== Initial Deposit ===");
+        console.log("User USDC balance before deposit:", usdc.balanceOf(user));
+
+        vm.startPrank(user);
+        usdc.approve(address(vaultStrategy), depositAmount);
+        uint256 sharesReceived = vaultStrategy.deposit(depositAmount, user);
+        vm.stopPrank();
+
+        console.log("Shares received:", sharesReceived);
+        console.log("User USDC balance after deposit:", usdc.balanceOf(user));
+        console.log("Vault total assets:", vaultStrategy.totalAssets());
+
+        // Get initial balances after deposit
+        uint256 initialAUSDCBalance = IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy));
+        uint256 initialDebtBalance = IERC20(vaultStrategy.variableDebtCbETH()).balanceOf(address(vaultStrategy));
+        uint256 initialLPBalance = IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy));
+
+        console.log("\n=== Initial Position ===");
+        console.log("Initial aUSDC Balance:", initialAUSDCBalance);
+        console.log("Initial Debt Balance:", initialDebtBalance);
+        console.log("Initial LP Balance:", initialLPBalance);
+
+        // Fast forward time to accumulate rewards (30 days)
+        vm.warp(block.timestamp + 30 days);
+
+        // Mock aUSDC balance increase (15% APY)
+        uint256 increaseInSupply = (initialAUSDCBalance * 15) / (12 * 100); // Monthly rate
+        uint256 newAUSDCBalance = initialAUSDCBalance + increaseInSupply;
+        console.log("\n=== Aave Yields ===");
+        console.log("aUSDC interest earned:", newAUSDCBalance - initialAUSDCBalance);
+        vm.mockCall(
+            vaultStrategy.aUSDC(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            abi.encode(newAUSDCBalance)
+        );
+
+        // Mock variable debt balance (2.5% APY for cbETH borrow)
+        uint256 increaseInDebt = (initialDebtBalance * 25) / (12 * 1000);
+        uint256 newDebtBalance = initialDebtBalance + increaseInDebt;
+        console.log("cbETH debt increase:", newDebtBalance - initialDebtBalance);
+        vm.mockCall(
+            vaultStrategy.variableDebtCbETH(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            abi.encode(newDebtBalance)
+        );
+
+        // Get Chainlink prices
+        address[] memory dataFeeds = new address[](3);
+        dataFeeds[0] = vaultStrategy.cbEthUsdDataFeedAddress();
+        dataFeeds[1] = vaultStrategy.usdcUsdDataFeedAddress();
+        dataFeeds[2] = vaultStrategy.aeroUsdDataFeedAddress();
+        uint256[] memory prices = vaultStrategy.getChainlinkDataFeedLatestAnswer(dataFeeds);
+
+        // Calculate Aerodrome rewards
+        uint256 monthlyRewardValue = (depositAmount * 45) / (12 * 100); // 3.75% monthly reward rate
+        uint256 usdcRewards = monthlyRewardValue / 2; // Half in USDC
+        uint256 aeroRewards = ((monthlyRewardValue / 2) * prices[1] * 1e18) / (prices[2] * 1e6);
+
+        console.log("\n=== Aerodrome Rewards ===");
+        console.log("Monthly Aerodrome rewards in USDC:", usdcRewards);
+        console.log("Monthly Aerodrome rewards in AERO tokens:", aeroRewards);
+
+        // Setup mock for claimFees
+        vm.mockCall(
+            address(vaultStrategy.aerodromePool()),
+            abi.encodeWithSelector(IPool.claimFees.selector),
+            abi.encode(usdcRewards, aeroRewards)
+        );
+
+        // Mock rewards balances
+        deal(address(vaultStrategy.AERO()), address(vaultStrategy), aeroRewards);
+        deal(address(usdc), address(vaultStrategy), usdcRewards);
+
+        // Record state before harvest
+        uint256 totalAssetsBeforeHarvest = vaultStrategy.totalAssets();
+        console.log("\n=== Pre-Harvest State ===");
+        console.log("Total assets before harvest:", totalAssetsBeforeHarvest);
+        console.log("Share price before harvest:", vaultStrategy.convertToAssets(1e6));
+
+        // Perform harvest
+        vm.prank(owner);
+        vaultStrategy.harvestReinvestAndReport();
+
+        uint256 totalAssetsAfterHarvest = vaultStrategy.totalAssets();
+        uint256 shareValueAfterHarvest = vaultStrategy.convertToAssets(1e6);
+
+        console.log("\n=== Post-Harvest State ===");
+        console.log("Total assets after harvest:", totalAssetsAfterHarvest);
+        console.log("Asset increase:", totalAssetsAfterHarvest - totalAssetsBeforeHarvest);
+        console.log("Share price after harvest:", shareValueAfterHarvest);
+        console.log("Strategist fee accumulated:", vaultStrategy.accumulatedStrategistFee());
+
+        // Verify harvest results
+        assertGt(totalAssetsAfterHarvest, totalAssetsBeforeHarvest, "Total assets should increase after harvest");
+        assertGt(shareValueAfterHarvest, 1e6, "Share value should increase after harvest");
+
+        // Perform withdrawal
+        console.log("\n=== Withdrawal ===");
+        uint256 userShares = vaultStrategy.balanceOf(user);
+        console.log("User shares before withdrawal:", userShares);
+        console.log("Share value at withdrawal:", vaultStrategy.convertToAssets(1e6));
+        uint256 expectedAssets = vaultStrategy.convertToAssets(userShares);
+        console.log("Expected assets to receive:", expectedAssets);
+
+        vm.startPrank(user);
+        uint256 assetsReceived = vaultStrategy.redeem(userShares, user, user);
+        vm.stopPrank();
+
+        console.log("\n=== Final State ===");
+        console.log("Assets received:", assetsReceived);
+        console.log("Final user USDC balance:", usdc.balanceOf(user));
+        console.log("Final user shares:", vaultStrategy.balanceOf(user));
+        console.log("Final vault total assets:", vaultStrategy.totalAssets());
+
+        // Final assertions
+        assertEq(vaultStrategy.balanceOf(user), 0, "User should have no shares left");
+        assertGt(usdc.balanceOf(user), depositAmount, "User should receive more than deposited");
+        assertApproxEqRel(
+            assetsReceived,
+            expectedAssets,
+            0.01e18, // 1% tolerance
+            "Assets received should match expected amount"
+        );
+    }
 }
