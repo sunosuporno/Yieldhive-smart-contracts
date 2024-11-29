@@ -1026,7 +1026,7 @@ contract Vault_StrategyTest is Test {
         console.log("Initial Debt Balance:", initialDebtBalance);
 
         // Fast forward time to accumulate rewards (7 days)
-        vm.warp(block.timestamp + 7 days);
+        vm.warp(block.timestamp + 30 days);
 
         // Mock aUSDC balance increase (15% APY)
         uint256 increaseInSupply = (initialAUSDCBalance * 15) / (12 * 100); // Monthly rate for simplicity => 125
@@ -1095,5 +1095,96 @@ contract Vault_StrategyTest is Test {
 
         // Verify strategist fee accumulation
         assertGt(vaultStrategy.accumulatedStrategistFee(), 0, "Should have accumulated strategist fee");
+    }
+
+    // ... existing code ...
+
+    function testHarvestReinvestAndReportWithLoss() public {
+        // Initial setup - deposit 10,000 USDC
+        uint256 depositAmount = 10_000e6; // 10,000 USDC
+        deal(address(usdc), user, depositAmount);
+
+        vm.startPrank(user);
+        usdc.approve(address(vaultStrategy), depositAmount);
+        vaultStrategy.deposit(depositAmount, user);
+        vm.stopPrank();
+
+        // Get actual initial balances after deposit
+        uint256 initialAUSDCBalance = IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy));
+        uint256 initialDebtBalance = IERC20(vaultStrategy.variableDebtCbETH()).balanceOf(address(vaultStrategy));
+
+        console.log("Initial aUSDC Balance:", initialAUSDCBalance);
+        console.log("Initial Debt Balance:", initialDebtBalance);
+
+        // Fast forward time to accumulate rewards (30 days)
+        vm.warp(block.timestamp + 30 days);
+
+        // Mock aUSDC balance increase (5% APY - lower than normal)
+        uint256 increaseInSupply = (initialAUSDCBalance * 5) / (12 * 100); // Monthly rate => ~42
+        uint256 newAUSDCBalance = initialAUSDCBalance + increaseInSupply;
+        console.log("aUSDC interest earned:", newAUSDCBalance - initialAUSDCBalance);
+        vm.mockCall(
+            vaultStrategy.aUSDC(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            abi.encode(newAUSDCBalance)
+        );
+
+        // Mock variable debt balance (8% APY for cbETH borrow - higher than normal)
+        uint256 increaseInDebt = (initialDebtBalance * 60) / (12 * 100); // ~$44.44
+        uint256 newDebtBalance = initialDebtBalance + increaseInDebt;
+        console.log("cbETH debt increase:", newDebtBalance - initialDebtBalance);
+        vm.mockCall(
+            vaultStrategy.variableDebtCbETH(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            abi.encode(newDebtBalance)
+        );
+
+        // Get real prices from Chainlink
+        address[] memory dataFeeds = new address[](3);
+        dataFeeds[0] = vaultStrategy.cbEthUsdDataFeedAddress();
+        dataFeeds[1] = vaultStrategy.usdcUsdDataFeedAddress();
+        dataFeeds[2] = vaultStrategy.aeroUsdDataFeedAddress();
+
+        uint256[] memory prices = vaultStrategy.getChainlinkDataFeedLatestAnswer(dataFeeds);
+
+        // Calculate reduced rewards (15% of normal)
+        uint256 monthlyRewardValue = (depositAmount * 45) / (12 * 100); // Normal monthly reward
+        monthlyRewardValue = monthlyRewardValue * 15 / 100; // Take only 15% of normal rewards
+        uint256 usdcRewards = monthlyRewardValue / 2; // Half in USDC
+
+        // Convert USDC rewards to AERO tokens
+        uint256 aeroRewards = ((monthlyRewardValue / 2) * prices[1] * 1e18) / (prices[2] * 1e6);
+        console.log("Monthly Aerodrome rewards in USDC:", usdcRewards);
+        console.log("Monthly Aerodrome rewards in AERO tokens:", aeroRewards);
+
+        // Setup mock for claimFees with reduced rewards
+        vm.mockCall(
+            address(vaultStrategy.aerodromePool()),
+            abi.encodeWithSelector(IPool.claimFees.selector),
+            abi.encode(usdcRewards, aeroRewards)
+        );
+
+        // Mock AERO balance after claiming
+        deal(address(vaultStrategy.AERO()), address(vaultStrategy), aeroRewards);
+        // Mock additional USDC balance from fees
+        deal(address(usdc), address(vaultStrategy), usdcRewards);
+
+        // Record state before harvest
+        uint256 totalAssetsBefore = vaultStrategy.totalAssets();
+        console.log("Total assets before harvest:", totalAssetsBefore);
+
+        // Call harvest as owner
+        vm.prank(owner);
+        vaultStrategy.harvestReinvestAndReport();
+
+        uint256 totalAssetsAfter = vaultStrategy.totalAssets();
+        console.log("Total assets after harvest:", totalAssetsAfter);
+        console.log("Asset change:", int256(totalAssetsAfter) - int256(totalAssetsBefore));
+
+        // Verify total assets decreased
+        assertLt(totalAssetsAfter, totalAssetsBefore, "Total assets should decrease after harvest");
+
+        // Verify no strategist fee was accumulated (since there was a loss)
+        assertEq(vaultStrategy.accumulatedStrategistFee(), 0, "Should not have accumulated strategist fee");
     }
 }
