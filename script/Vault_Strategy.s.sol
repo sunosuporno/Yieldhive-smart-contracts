@@ -26,18 +26,16 @@ contract Vault_StrategyScript is Script {
         proxyAdmin = new ProxyAdmin(deployer);
 
         // Prepare initialization data
-        address asset = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+        address asset = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913; // USDC on OP
         uint256 initialDeposit = 100;
         address initialOwner = 0x07a721260416e764618B059811eaf099a940Af14;
         string memory name = "YieldHive Prime USDC";
         string memory symbol = "ypUSDC";
-        address pythContract = 0x8250f4aF4B972684F7b336503E2D6dFeDeB1487a;
         address aavePoolContract = 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5;
         address aaveProtocolDataProviderContract = 0x793177a6Cf520C7fE5B2E45660EBB48132184BBC;
-        address aerodromePoolContract = 0x6cDcb1C4A4D1C3C6d054b27AC5B77e89eAFb971d; // mainnet
-        address pythPriceUpdaterContract = 0x4896bB51d19A7c7a69e48732580FB628903086eF;
         address aaveOracleContract = 0x2Cc0Fc26eD4563A5ce5e8bdcfe1A2878676Ae156;
         address strategist = 0x07a721260416e764618B059811eaf099a940Af14;
+        address aerodromePoolContract = 0x6cDcb1C4A4D1C3C6d054b27AC5B77e89eAFb971d;
 
         bytes memory initData = abi.encodeWithSelector(
             VaultStrategy.initialize.selector,
@@ -46,13 +44,11 @@ contract Vault_StrategyScript is Script {
             initialOwner,
             name,
             symbol,
-            pythContract,
             aavePoolContract,
             aaveProtocolDataProviderContract,
-            aerodromePoolContract,
-            pythPriceUpdaterContract,
             aaveOracleContract,
-            strategist
+            strategist,
+            aerodromePoolContract
         );
 
         // Deploy the TransparentUpgradeableProxy
