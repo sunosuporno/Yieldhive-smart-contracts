@@ -933,4 +933,61 @@ contract Vault_StrategyTest is Test {
             vaultStrategy.totalSupply(), initialTotalSupply - depositAmount, "Incorrect total supply after withdrawal"
         );
     }
+
+    function testZeroWithdraw() public {
+        // Setup: Initial deposit to have some funds in the vault
+        uint256 depositAmount = 100_000_000; // 100 USDC
+        vm.prank(user);
+        vaultStrategy.deposit(depositAmount, user);
+
+        // Record initial states
+        uint256 initialUserBalance = usdc.balanceOf(user);
+        uint256 initialUserShares = vaultStrategy.balanceOf(user);
+        uint256 initialTotalSupply = vaultStrategy.totalSupply();
+
+        // Attempt to withdraw zero amount
+        vm.prank(user);
+        vm.expectRevert();
+        vaultStrategy.withdraw(0, user, user);
+
+        // Verify no state changes
+        assertEq(vaultStrategy.balanceOf(user), initialUserShares, "User shares should remain unchanged");
+        assertEq(usdc.balanceOf(user), initialUserBalance, "User USDC balance should remain unchanged");
+        assertEq(vaultStrategy.totalSupply(), initialTotalSupply, "Total supply should remain unchanged");
+    }
+
+    function testFuzzWithdraw(uint256 depositAmount, uint256 withdrawAmount) public {
+        // Bound deposit amount between 35 USDC and 50K USDC
+        depositAmount = bound(depositAmount, 35e6, 50_000e6);
+        // Bound withdraw to be no more than deposit
+        withdrawAmount = bound(withdrawAmount, 5e6, depositAmount);
+
+        // Initial deposit
+        vm.startPrank(user);
+        vaultStrategy.deposit(depositAmount, user);
+
+        // Record state before withdrawal
+        uint256 preWithdrawBalance = usdc.balanceOf(user);
+        uint256 preWithdrawShares = vaultStrategy.balanceOf(user);
+
+        // Perform withdrawal
+        if (withdrawAmount == 0) {
+            vm.expectRevert();
+        }
+        vaultStrategy.withdraw(withdrawAmount, user, user);
+
+        // Verify state after withdrawal
+        if (withdrawAmount > 0) {
+            assertEq(
+                usdc.balanceOf(user), preWithdrawBalance + withdrawAmount, "Incorrect USDC balance after withdrawal"
+            );
+            assertEq(
+                vaultStrategy.balanceOf(user),
+                preWithdrawShares - withdrawAmount,
+                "Incorrect share balance after withdrawal"
+            );
+        }
+
+        vm.stopPrank();
+    }
 }
