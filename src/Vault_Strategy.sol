@@ -237,6 +237,10 @@ contract VaultStrategy is
         uint256 safeAmount = (cbEthAbleToBorrow * 95) / 100;
         aavePool.borrow(cbETH, safeAmount, 2, 0, address(this));
         console.log("borrowed cbETH");
+        //calculate aToken And debtToken balances
+        previousAUSDCBalance = IERC20(aUSDC).balanceOf(address(this));
+        previousVariableDebtBalance = IERC20(variableDebtCbETH).balanceOf(address(this));
+
         uint256 cbEthBalance = IERC20(cbETH).balanceOf(address(this));
         (uint256 usdcReceived, uint256 aeroReceived) = _swapcbETHToUSDCAndAERO(cbEthBalance);
         console.log("swapped cbETH to USDC and AERO");
@@ -419,52 +423,90 @@ contract VaultStrategy is
         uint256[] memory prices = getChainlinkDataFeedLatestAnswer(dataFeedAddresses);
         uint256 cbETHPrice = prices[0];
         uint256 usdcPrice = prices[1];
-        uint256 aeroPriceInUSD = prices[2];
+        uint256 aeroPrice = prices[2];
+
+        console.log("\nPrices fetched from Chainlink");
 
         // Get current balances
         uint256 currentAUSDCBalance = IERC20(aUSDC).balanceOf(address(this));
         uint256 currentVariableDebtBalance = IERC20(variableDebtCbETH).balanceOf(address(this));
-
+        console.log("currentAUSDCBalance", currentAUSDCBalance);
+        console.log("currentVariableDebtBalance", currentVariableDebtBalance);
         // Calculate the change in balances
         uint256 borrowedCbETHChange = currentVariableDebtBalance - previousVariableDebtBalance;
-
+        console.log("borrowedCbETHChange", borrowedCbETHChange);
         // Calculate the net gain in Aave
         uint256 suppliedUSDCValueChange = currentAUSDCBalance - previousAUSDCBalance;
-        uint256 borrowedCbETHValueChangeInUSD = (cbETHPrice * borrowedCbETHChange) / (usdcPrice * 10 ** 12);
-
-        int256 aaveNetGain = int256(suppliedUSDCValueChange) - int256(borrowedCbETHValueChangeInUSD);
-
+        console.log("suppliedUSDCValueChange", suppliedUSDCValueChange);
+        uint256 borrowedCbETHValueChangeInUSDC = (cbETHPrice * borrowedCbETHChange) / (usdcPrice * 10 ** 12);
+        console.log("borrowedCbETHValueChangeInUSDC", borrowedCbETHValueChangeInUSDC);
+        int256 aaveNetGain = int256(suppliedUSDCValueChange) - int256(borrowedCbETHValueChangeInUSDC);
+        console.log("aaveNetGain", aaveNetGain);
         // Update the previous balances
         previousAUSDCBalance = currentAUSDCBalance;
         previousVariableDebtBalance = currentVariableDebtBalance;
 
-        // Get initial balances
-        uint256 initialAeroBalance = IERC20(AERO).balanceOf(address(this));
-        uint256 initialUsdcBalance = IERC20(asset()).balanceOf(address(this)) - accumulatedDeposits;
+        // // Get initial balances
+        // uint256 initialAeroBalance = IERC20(AERO).balanceOf(address(this));
+        // uint256 initialUsdcBalance = IERC20(asset()).balanceOf(address(this));
+        // console.log("initialAeroBalance", initialAeroBalance);
+        // console.log("initialUsdcBalance", initialUsdcBalance);
 
         // Claim fees from Aerodrome Pool
-        aerodromePool.claimFees();
+        (uint256 claimedUsdc, uint256 claimedAero) = aerodromePool.claimFees();
+        console.log("claimedUsdc", claimedUsdc);
+        console.log("claimedAero", claimedAero);
 
-        uint256 currentAeroBalance = IERC20(AERO).balanceOf(address(this));
-        uint256 currentUSDCBalance = IERC20(asset()).balanceOf(address(this)) - accumulatedDeposits;
+        uint256 aeroValueInUsd = (claimedAero * aeroPrice) / (10 ** 18); // Adjust for AERO's 18 decimals
+        uint256 usdcValueInUsd = (claimedUsdc * usdcPrice) / (10 ** 6); // Adjust for USDC's 6 decimals
+        console.log("aeroValueInUsd", aeroValueInUsd);
+        console.log("usdcValueInUsd", usdcValueInUsd);
 
-        // Calculate claimed rewards
-        uint256 claimedAero = currentAeroBalance - initialAeroBalance;
-        uint256 claimedUsdc = currentUSDCBalance - initialUsdcBalance;
+        // Target a 50-50 split between AERO and USDC
+        uint256 totalValueInUsd = aeroValueInUsd + usdcValueInUsd;
+        uint256 targetValuePerToken = totalValueInUsd / 2;
 
-        if (currentAeroBalance > 0) {
-            currentUSDCBalance += _swapAEROToUSDC(currentAeroBalance);
-        }
+        // if (aeroValueInUsd > targetValuePerToken) {
+        //     // We have too much AERO, swap the excess to USDC
+        //     console.log("We have too much AERO, swap the excess to USDC");
+        //     uint256 excessAeroValue = aeroValueInUsd - targetValuePerToken;
+        //     uint256 aeroToSwap = (excessAeroValue * 10 ** 18) / aeroPrice;
+        //     if (aeroToSwap > 0) {
+        //         claimedUsdc += _swapAEROToUSDC(aeroToSwap);
+        //     }
+        // } else if (usdcValueInUsd > targetValuePerToken) {
+        //     // We have too much USDC, swap the excess to AERO
+        //     console.log("We have too much USDC, swap the excess to AERO");
+        //     uint256 excessUsdcValue = usdcValueInUsd - targetValuePerToken;
+        //     uint256 usdcToSwap = (excessUsdcValue * 10 ** 6) / usdcPrice;
+        //     if (usdcToSwap > 0) {
+        //         claimedAero += _swapUSDCToAERO(usdcToSwap);
+        //     }
+        // }
 
-        // Calculate total rewards in USDC
-        uint256 finalAeroBalance = IERC20(AERO).balanceOf(address(this));
-        uint256 finalUsdcBalance = IERC20(asset()).balanceOf(address(this)) - accumulatedDeposits;
-        uint256 totalRewardsInUSDC = (finalUsdcBalance - initialUsdcBalance)
-            + ((aeroPriceInUSD * (finalAeroBalance - initialAeroBalance)) / (usdcPrice * 10 ** 12));
+        // uint256 currentAeroBalance = IERC20(AERO).balanceOf(address(this));
+        // uint256 currentUSDCBalance = IERC20(asset()).balanceOf(address(this));
+        // console.log("currentAeroBalance", currentAeroBalance);
+        // console.log("currentUSDCBalance", currentUSDCBalance);
+
+        // // Calculate claimed rewards
+        // uint256 claimedAero = currentAeroBalance - initialAeroBalance;
+        // uint256 claimedUsdc = currentUSDCBalance - initialUsdcBalance;
+
+        // if (currentAeroBalance > 0) {
+        //     currentUSDCBalance += _swapAEROToUSDC(currentAeroBalance);
+        // }
+
+        // Calculate total rewards in USDC terms using the claimed amounts directly
+        uint256 totalRewardsInUSDC = (usdcValueInUsd + aeroValueInUsd) * 1e6 / (usdcPrice);
+        console.log("totalRewardsInUSDC", totalRewardsInUSDC);
+
+        // Or even better, use the values we already calculated:
+        // uint256 totalRewardsInUSDC = (usdcValueInUsd + aeroValueInUsd) * 1e6; // Convert back to USDC decimals
 
         // Calculate total profit, including Aerodrome rewards and Aave net gain
         int256 totalProfit = int256(totalRewardsInUSDC) + aaveNetGain;
-
+        console.log("totalProfit", totalProfit);
         // Only apply fee if there's a positive profit
         uint256 strategistFee = 0;
         if (totalProfit > 0) {
@@ -484,15 +526,12 @@ contract VaultStrategy is
 
         // Reinvest all rewards in Aerodrome Pool
         if (totalRewardsInUSDC > 0) {
-            uint256 aeroAmount = _swapUSDCToAERO(totalRewardsInUSDC / 2);
-
-            IERC20(AERO).safeTransfer(address(aerodromePool), aeroAmount);
-            IERC20(asset()).safeTransfer(address(aerodromePool), totalRewardsInUSDC / 2);
-            aerodromePool.mint(address(this));
+            // swap all rewards to USDC
+            uint256 aeroBal = IERC20(AERO).balanceOf(address(this));
+            _swapAEROToUSDC(aeroBal);
+            uint256 usdcBalance = IERC20(asset()).balanceOf(address(this));
+            _investFunds(usdcBalance, address(asset()));
         }
-
-        // Skim any excess assets from Aerodrome Pool
-        aerodromePool.skim(address(this));
 
         emit HarvestReport(
             uint256(totalProfit), netProfit, strategistFee, totalRewardsInUSDC, aaveNetGain, claimedAero, claimedUsdc
