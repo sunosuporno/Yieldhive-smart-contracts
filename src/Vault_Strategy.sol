@@ -21,6 +21,7 @@ import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import {console} from "forge-std/Test.sol";
+import {Aave} from "./Integrations/Aave.sol";
 
 contract VaultStrategy is
     Initializable,
@@ -90,6 +91,9 @@ contract VaultStrategy is
         uint256 claimedAero,
         uint256 claimedUsdc
     );
+
+    // Add this to track library address
+    address public aaveLibrary;
 
     /// @custom:oz-upgrades-unsafe-allow constructor
     constructor() {
@@ -210,40 +214,32 @@ contract VaultStrategy is
     }
 
     function _investFunds(uint256 amount, address assetAddress) internal {
-        // Get the price of the assets in USD from Pyth Network
+        // Get prices as before
         address[] memory dataFeedAddresses = new address[](2);
         dataFeedAddresses[0] = usdcUsdDataFeedAddress;
         dataFeedAddresses[1] = cbEthUsdDataFeedAddress;
         uint256[] memory prices = getChainlinkDataFeedLatestAnswer(dataFeedAddresses);
-        uint256 usdcPriceInUSD = prices[0];
-        uint256 cbEthPriceInUSD = prices[1];
-        // approve and supply the asset USDC to the Aave pool
-        IERC20(assetAddress).approve(address(aavePool), amount);
-        aavePool.supply(assetAddress, amount, address(this), 0);
 
-        console.log("invested in Aave");
+        // Use Aave library
+        Aave.SupplyAndBorrowParams memory params = Aave.SupplyAndBorrowParams({
+            pool: aavePool,
+            dataProvider: aaveProtocolDataProvider,
+            assetToSupply: assetAddress,
+            assetToBorrow: cbETH,
+            supplyAmount: amount,
+            supplyPriceUSD: prices[0],
+            borrowPriceUSD: prices[1],
+            safetyFactor: 95
+        });
 
-        // Convert the amount of USDC supplied to 18 decimals
-        uint256 usdcAmountIn18Decimals = amount * 10 ** 12;
-        // Finding total price of the asset supplied in USD (now correctly using 10**8)
-        uint256 usdcAmountIn18DecimalsInUSD = (usdcAmountIn18Decimals * usdcPriceInUSD) / 10 ** 8;
-        // Fetching LTV of USDC from Aave
-        (, uint256 ltv,,,,,,,,) = aaveProtocolDataProvider.getReserveConfigurationData(assetAddress);
-        // Calculating the maximum loan amount in USD
-        uint256 maxLoanAmountIn18DecimalsInUSD = (usdcAmountIn18DecimalsInUSD * ltv) / 10 ** 4;
-        // Calculating the maximum amount of cbETH that can be borrowed (now correctly using 10**8)
-        uint256 cbEthAbleToBorrow = (maxLoanAmountIn18DecimalsInUSD * 10 ** 8) / cbEthPriceInUSD;
-        // Borrowing cbETH after calculating a safe amount
-        uint256 safeAmount = (cbEthAbleToBorrow * 95) / 100;
-        aavePool.borrow(cbETH, safeAmount, 2, 0, address(this));
-        console.log("borrowed cbETH");
-        //calculate aToken And debtToken balances
-        previousAUSDCBalance = IERC20(aUSDC).balanceOf(address(this));
-        previousVariableDebtBalance = IERC20(variableDebtCbETH).balanceOf(address(this));
+        Aave.SupplyAndBorrowResult memory result = Aave.supplyAndBorrow(params);
 
-        uint256 cbEthBalance = IERC20(cbETH).balanceOf(address(this));
-        (uint256 usdcReceived, uint256 aeroReceived) = _swapcbETHToUSDCAndAERO(cbEthBalance);
-        console.log("swapped cbETH to USDC and AERO");
+        // Store previous balances
+        previousAUSDCBalance = result.aTokenBalance;
+        previousVariableDebtBalance = result.debtTokenBalance;
+
+        // Continue with Aerodrome integration
+        (uint256 usdcReceived, uint256 aeroReceived) = _swapcbETHToUSDCAndAERO(result.borrowedAmount);
         IERC20(asset()).safeTransfer(address(aerodromePool), usdcReceived);
         IERC20(AERO).safeTransfer(address(aerodromePool), aeroReceived);
         aerodromePool.mint(address(this));
@@ -877,5 +873,9 @@ contract VaultStrategy is
         SafeERC20.safeTransfer(IERC20(asset()), receiver, withdrawnAmount);
 
         emit Withdraw(caller, receiver, owner, withdrawnAmount, shares);
+    }
+
+    function upgradeAaveLibrary(address newLibrary) external onlyOwner {
+        aaveLibrary = newLibrary;
     }
 }
