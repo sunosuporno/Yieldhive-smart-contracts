@@ -172,27 +172,4 @@ library Aave {
 
         return result;
     }
-
-    // function getChainlinkDataFeedLatestAnswer(address[] memory dataFeeds) public payable returns (uint256[] memory) {
-    //     // Create array to store prices
-    //     uint256[] memory prices = new uint256[](dataFeeds.length);
-
-    //     // Get prices for each feed
-    //     for (uint256 i = 0; i < dataFeeds.length; i++) {
-    //         // Get latest round data
-    //         (
-    //             /* uint80 roundID */
-    //             ,
-    //             int256 answer,
-    //             uint256 startedAt,
-    //             uint256 timeStamp,
-    //             /* uint80 answeredInRound */
-    //         ) = AggregatorV3Interface(dataFeeds[i]).latestRoundData();
-
-    //         // Convert to uint256 and store in prices array
-    //         prices[i] = uint256(answer);
-    //     }
-
-    //     return prices;
-    // }
 }

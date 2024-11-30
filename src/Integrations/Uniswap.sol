@@ -83,16 +83,6 @@ library Uniswap {
     ) internal returns (uint256 amountOut) {
         TransferHelper.safeApprove(tokenIn, address(swapRouter), amountIn);
 
-        // // Get price feed IDs for both input and output tokens
-        // address inPriceFeedId = getDataFeedAddress(tokenIn);
-        // address outPriceFeedId = getDataFeedAddress(tokenOut);
-
-        // address[] memory dataFeedAddresses = new address[](2);
-        // dataFeedAddresses[0] = inPriceFeedId;
-        // dataFeedAddresses[1] = outPriceFeedId;
-        // uint256[] memory prices = getChainlinkDataFeedLatestAnswer(dataFeedAddresses);
-        // uint256 inPrice = prices[0];
-        // uint256 outPrice = prices[1];
         console.log("Price calculated for swap");
 
         // Calculate the expected amount out
@@ -122,18 +112,6 @@ library Uniswap {
         amountOut = swapRouter.exactInput(params);
         console.log("Swap executed");
     }
-
-    // function getDataFeedAddress(address token) external view returns (address) {
-    //     if (token == address(asset())) {
-    //         return usdcUsdDataFeedAddress;
-    //     } else if (token == cbETH) {
-    //         return cbEthUsdDataFeedAddress;
-    //     } else if (token == AERO) {
-    //         return aeroUsdDataFeedAddress;
-    //     } else {
-    //         revert("Unsupported token");
-    //     }
-    // }
 
     function swapcbETHToUSDCAndAERO(uint256 amountIn, uint256 usdcPrice, uint256 cbETHPrice, uint256 aeroPrice)
         external
@@ -170,8 +148,4 @@ library Uniswap {
     {
         amountOut = _swap(AERO, USDC, 3000, 500, amountIn, aeroPrice, usdcPrice);
     }
-
-    // function swapUSDCToAERO(uint256 amountIn) external returns (uint256 amountOut) {
-    //     amountOut = swap(asset(), AERO, 500, 3000, amountIn);
-    // }
 }
