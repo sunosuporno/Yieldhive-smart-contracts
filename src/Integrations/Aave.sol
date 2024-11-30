@@ -6,6 +6,7 @@ import {IPool as IPoolAave} from "../interfaces/IPool.sol";
 import {IPoolDataProvider} from "../interfaces/IPoolDataProvider.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 
 library Aave {
     using SafeERC20 for IERC20;
@@ -59,37 +60,86 @@ library Aave {
         uint256 newDebtBalance;
     }
 
-    function supplyAndBorrow(SupplyAndBorrowParams memory params)
+    address constant AAVE_POOL = 0xA238Dd80C259a72e81d7e4664a9801593F98d1c5;
+    address constant AAVE_POOL_DATA_PROVIDER = 0x793177a6Cf520C7fE5B2E45660EBB48132184BBC;
+    address constant USDC = 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913;
+    address constant CBETH = 0x2Ae3F1Ec7F1F5012CFEab0185bfc7aa3cf0DEc22;
+    address constant A_USDC = 0x4e65fE4DbA92790696d040ac24Aa414708F5c0AB;
+    address constant DEBT_CBETH = 0x1DabC36f19909425f654777249815c073E8Fd79F;
+    address constant usdcUsdDataFeedAddress = 0x7e860098F58bBFC8648a4311b374B1D669a2bc6B;
+    address constant cbEthUsdDataFeedAddress = 0xd7818272B9e248357d13057AAb0B417aF31E817d;
+    address constant aeroUsdDataFeedAddress = 0x4EC5970fC728C5f65ba413992CD5fF6FD70fcfF0;
+
+    // function supplyAndBorrow(SupplyAndBorrowParams memory params)
+    //     external
+    //     returns (SupplyAndBorrowResult memory result)
+    // {
+    //     console.log("\nSupply and Borrow Running");
+    //     // 1. Supply asset
+    //     IERC20(params.assetToSupply).approve(address(params.pool), params.supplyAmount);
+    //     params.pool.supply(params.assetToSupply, params.supplyAmount, params.onBehalfOf, 0);
+
+    //     // 2. Calculate borrow amount
+    //     // Convert the amount of USDC supplied to 18 decimals
+    //     uint256 usdcAmountIn18Decimals = params.supplyAmount * 10 ** 12;
+    //     // Finding total price of the asset supplied in USD (now correctly using 10**8)
+    //     uint256 usdcAmountIn18DecimalsInUSD = (usdcAmountIn18Decimals * params.supplyPriceUSD) / 10 ** 8;
+    //     console.log("usdcAmountIn18DecimalsInUSD: %s", usdcAmountIn18DecimalsInUSD);
+    //     uint256 supplyAmountInUSD = (params.supplyAmount * params.supplyPriceUSD) / 10 ** 6;
+    //     console.log("supplyAmountInUSD: %s", supplyAmountInUSD);
+
+    //     // 3. Get LTV from Aave
+    //     (, uint256 ltv,,,,,,,,) = params.dataProvider.getReserveConfigurationData(params.assetToSupply);
+    //     console.log("ltv: %s", ltv);
+    //     // 4. Calculate maximum borrow amount
+    //     uint256 maxLoanAmountInUSD = (supplyAmountInUSD * ltv) / 10 ** 4;
+    //     console.log("maxLoanAmountInUSD: %s", maxLoanAmountInUSD);
+    //     uint256 assetAbleToBorrow = (maxLoanAmountInUSD * 10 ** 18) / params.borrowPriceUSD;
+    //     console.log("assetAbleToBorrow: %s", assetAbleToBorrow);
+    //     uint256 safeAmount = (assetAbleToBorrow * params.safetyFactor) / 100;
+    //     console.log("safeAmount: %s", safeAmount);
+    //     // 5. Borrow asset
+    //     params.pool.borrow(params.assetToBorrow, safeAmount, 2, 0, params.onBehalfOf);
+
+    //     // 6. Get final balances
+    //     result.suppliedAmount = params.supplyAmount;
+    //     result.borrowedAmount = safeAmount;
+    //     result.aTokenBalance = IERC20(params.assetToSupply).balanceOf(params.onBehalfOf);
+    //     result.debtTokenBalance = IERC20(params.assetToBorrow).balanceOf(params.onBehalfOf);
+
+    //     return result;
+    // }
+
+    function supplyAndBorrow(uint256 amount, address recipient, uint256 usdcPriceInUSD, uint256 cbEthPriceInUSD)
         external
-        returns (SupplyAndBorrowResult memory result)
+        returns (uint256 previousAUSDCBalance, uint256 previousVariableDebtBalance)
     {
         console.log("\nSupply and Borrow Running");
-        // 1. Supply asset
-        IERC20(params.assetToSupply).approve(address(params.pool), params.supplyAmount);
-        params.pool.supply(params.assetToSupply, params.supplyAmount, params.onBehalfOf, 0);
+        console.log("supplying USDC to Aave");
+        console.log("recipient", recipient);
+        IERC20(USDC).approve(address(AAVE_POOL), amount);
+        IPoolAave(AAVE_POOL).supply(USDC, amount, recipient, 0);
 
-        // 2. Calculate borrow amount
-        uint256 supplyAmountIn18Decimals = params.supplyAmount * 10 ** 12; // Convert USDC to 18 decimals
-        uint256 supplyAmountInUSD = (supplyAmountIn18Decimals * params.supplyPriceUSD) / 10 ** 8;
+        console.log("invested in Aave");
 
-        // 3. Get LTV from Aave
-        (, uint256 ltv,,,,,,,,) = params.dataProvider.getReserveConfigurationData(params.assetToSupply);
-
-        // 4. Calculate maximum borrow amount
-        uint256 maxLoanAmountInUSD = (supplyAmountInUSD * ltv) / 10 ** 4;
-        uint256 assetAbleToBorrow = (maxLoanAmountInUSD * 10 ** 8) / params.borrowPriceUSD;
-        uint256 safeAmount = (assetAbleToBorrow * params.safetyFactor) / 100;
-
-        // 5. Borrow asset
-        params.pool.borrow(params.assetToBorrow, safeAmount, 2, 0, params.onBehalfOf);
-
-        // 6. Get final balances
-        result.suppliedAmount = params.supplyAmount;
-        result.borrowedAmount = safeAmount;
-        result.aTokenBalance = IERC20(params.assetToSupply).balanceOf(params.onBehalfOf);
-        result.debtTokenBalance = IERC20(params.assetToBorrow).balanceOf(params.onBehalfOf);
-
-        return result;
+        // Convert the amount of USDC supplied to 18 decimals
+        uint256 usdcAmountIn18Decimals = amount * 10 ** 12;
+        // Finding total price of the asset supplied in USD (now correctly using 10**8)
+        uint256 usdcAmountIn18DecimalsInUSD = (usdcAmountIn18Decimals * usdcPriceInUSD) / 10 ** 8;
+        // Fetching LTV of USDC from Aave
+        (, uint256 ltv,,,,,,,,) = IPoolDataProvider(AAVE_POOL_DATA_PROVIDER).getReserveConfigurationData(USDC);
+        // Calculating the maximum loan amount in USD
+        uint256 maxLoanAmountIn18DecimalsInUSD = (usdcAmountIn18DecimalsInUSD * ltv) / 10 ** 4;
+        // Calculating the maximum amount of cbETH that can be borrowed (now correctly using 10**8)
+        uint256 cbEthAbleToBorrow = (maxLoanAmountIn18DecimalsInUSD * 10 ** 8) / cbEthPriceInUSD;
+        // Borrowing cbETH after calculating a safe amount
+        uint256 safeAmount = (cbEthAbleToBorrow * 95) / 100;
+        console.log("safeAmount", safeAmount);
+        IPoolAave(AAVE_POOL).borrow(CBETH, safeAmount, 2, 0, recipient);
+        console.log("borrowed cbETH");
+        //calculate aToken And debtToken balances
+        previousAUSDCBalance = IERC20(A_USDC).balanceOf(recipient);
+        previousVariableDebtBalance = IERC20(DEBT_CBETH).balanceOf(recipient);
     }
 
     function calculateRebalanceAmount(RebalanceParams memory params)
@@ -162,4 +212,27 @@ library Aave {
 
         return result;
     }
+
+    // function getChainlinkDataFeedLatestAnswer(address[] memory dataFeeds) public payable returns (uint256[] memory) {
+    //     // Create array to store prices
+    //     uint256[] memory prices = new uint256[](dataFeeds.length);
+
+    //     // Get prices for each feed
+    //     for (uint256 i = 0; i < dataFeeds.length; i++) {
+    //         // Get latest round data
+    //         (
+    //             /* uint80 roundID */
+    //             ,
+    //             int256 answer,
+    //             uint256 startedAt,
+    //             uint256 timeStamp,
+    //             /* uint80 answeredInRound */
+    //         ) = AggregatorV3Interface(dataFeeds[i]).latestRoundData();
+
+    //         // Convert to uint256 and store in prices array
+    //         prices[i] = uint256(answer);
+    //     }
+
+    //     return prices;
+    // }
 }

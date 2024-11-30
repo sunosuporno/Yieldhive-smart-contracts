@@ -22,6 +22,7 @@ import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/Pau
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import {console} from "forge-std/Test.sol";
 import {Aave} from "./Integrations/Aave.sol";
+import {Uniswap} from "./Integrations/Uniswap.sol";
 
 contract VaultStrategy is
     Initializable,
@@ -220,29 +221,15 @@ contract VaultStrategy is
         dataFeedAddresses[1] = cbEthUsdDataFeedAddress;
         uint256[] memory prices = getChainlinkDataFeedLatestAnswer(dataFeedAddresses);
 
-        // Use Aave library
-        Aave.SupplyAndBorrowParams memory params = Aave.SupplyAndBorrowParams({
-            pool: aavePool,
-            dataProvider: aaveProtocolDataProvider,
-            assetToSupply: assetAddress,
-            assetToBorrow: cbETH,
-            onBehalfOf: address(this),
-            supplyAmount: amount,
-            supplyPriceUSD: prices[0],
-            borrowPriceUSD: prices[1],
-            safetyFactor: 95
-        });
-
-        Aave.SupplyAndBorrowResult memory result = Aave.supplyAndBorrow(params);
-
-        // Store previous balances
-        previousAUSDCBalance = IERC20(aUSDC).balanceOf(address(this));
-        previousVariableDebtBalance = IERC20(variableDebtCbETH).balanceOf(address(this));
+        (previousAUSDCBalance, previousVariableDebtBalance) =
+            Aave.supplyAndBorrow(amount, address(this), prices[0], prices[1]);
         console.log("previousAUSDCBalance", previousAUSDCBalance);
         console.log("previousVariableDebtBalance", previousVariableDebtBalance);
+        uint256 cbEthBalance = IERC20(cbETH).balanceOf(address(this));
+        console.log("cbEthBalance", cbEthBalance);
 
         // Continue with Aerodrome integration
-        (uint256 usdcReceived, uint256 aeroReceived) = _swapcbETHToUSDCAndAERO(result.borrowedAmount);
+        (uint256 usdcReceived, uint256 aeroReceived) = _swapcbETHToUSDCAndAERO(cbEthBalance);
         IERC20(asset()).safeTransfer(address(aerodromePool), usdcReceived);
         IERC20(AERO).safeTransfer(address(aerodromePool), aeroReceived);
         aerodromePool.mint(address(this));
@@ -463,93 +450,73 @@ contract VaultStrategy is
         emit StrategistFeeClaimed(amount, accumulatedStrategistFee);
     }
 
-    function _swap(address tokenIn, address tokenOut, uint256 fee1, uint256 fee2, uint256 amountIn)
-        internal
-        returns (uint256 amountOut)
-    {
-        TransferHelper.safeApprove(tokenIn, address(swapRouter), amountIn);
-
-        // Get price feed IDs for both input and output tokens
-        address inPriceFeedId = getDataFeedAddress(tokenIn);
-        address outPriceFeedId = getDataFeedAddress(tokenOut);
-
-        address[] memory dataFeedAddresses = new address[](2);
-        dataFeedAddresses[0] = inPriceFeedId;
-        dataFeedAddresses[1] = outPriceFeedId;
-        uint256[] memory prices = getChainlinkDataFeedLatestAnswer(dataFeedAddresses);
-        uint256 inPrice = prices[0];
-        uint256 outPrice = prices[1];
-        console.log("Price calculated for swap");
-
-        // Calculate the expected amount out
-        uint256 expectedAmountOut = (amountIn * inPrice) / outPrice;
-
-        // Adjust for decimal differences if necessary
-        uint256 inDecimals = IERC20Metadata(tokenIn).decimals();
-        uint256 outDecimals = IERC20Metadata(tokenOut).decimals();
-        if (inDecimals != outDecimals) {
-            expectedAmountOut = (expectedAmountOut * (10 ** outDecimals)) / (10 ** inDecimals);
-        }
-
-        // Calculate the minimum amount out with 2% slippage tolerance
-        uint256 amountOutMinimum = (expectedAmountOut * 98) / 100;
-        console.log("Amount out minimum calculated");
-
-        bytes memory path = abi.encodePacked(tokenIn, uint24(fee1), WETH9, uint24(fee2), tokenOut);
-
-        IV3SwapRouter.ExactInputParams memory params = IV3SwapRouter.ExactInputParams({
-            path: path,
-            recipient: address(this),
-            amountIn: amountIn,
-            amountOutMinimum: amountOutMinimum
-        });
-        console.log("Params set for swap");
-
-        amountOut = swapRouter.exactInput(params);
-        console.log("Swap executed");
-    }
-
-    function getDataFeedAddress(address token) internal view returns (address) {
-        if (token == address(asset())) {
-            return usdcUsdDataFeedAddress;
-        } else if (token == cbETH) {
-            return cbEthUsdDataFeedAddress;
-        } else if (token == AERO) {
-            return aeroUsdDataFeedAddress;
-        } else {
-            revert("Unsupported token");
-        }
-    }
-
     function _swapcbETHToUSDCAndAERO(uint256 amountIn)
         internal
         returns (uint256 amountOutUSDC, uint256 amountOutAERO)
     {
-        address assetAddress = asset();
-        console.log("swapping cbETH to USDC and AERO");
-        // Swap half of cbETH to AERO
-        amountOutAERO = _swap(cbETH, AERO, 500, 3000, amountIn / 2);
-        console.log("swapped cbETH to AERO");
-        // Swap the other half of cbETH to USDC
-        amountOutUSDC = _swap(cbETH, assetAddress, 500, 500, amountIn / 2);
-        console.log("swapped cbETH to USDC");
-        return (amountOutUSDC, amountOutAERO);
+        Uniswap.SwapParams memory params = Uniswap.SwapParams({
+            router: swapRouter,
+            tokenIn: cbETH,
+            tokenOut: address(asset()),
+            WETH9: WETH9,
+            fee1: 500,
+            fee2: 500,
+            amountIn: amountIn,
+            priceFeedIn: cbEthUsdDataFeedAddress,
+            priceFeedOut: usdcUsdDataFeedAddress
+        });
+
+        Uniswap.TokenSwapResult memory result = Uniswap.swapCbETHToUSDCAndAERO(params, address(asset()), AERO);
+
+        return (result.amountOutUSDC, result.amountOutAERO);
     }
 
     function _swapUSDCAndAEROToCbETH(uint256 amountInUSDC, uint256 amountInAERO) internal returns (uint256) {
-        address assetAddress = asset();
-        // Swap USDC to cbETH
-        uint256 amountOutcbETH1 = _swap(assetAddress, cbETH, 500, 500, amountInUSDC);
-        uint256 amountOutcbETH2 = _swap(AERO, cbETH, 3000, 500, amountInAERO);
-        return amountOutcbETH1 + amountOutcbETH2;
+        Uniswap.SwapParams memory params = Uniswap.SwapParams({
+            router: swapRouter,
+            tokenIn: address(asset()),
+            tokenOut: cbETH,
+            WETH9: WETH9,
+            fee1: 500,
+            fee2: 500,
+            amountIn: amountInUSDC,
+            priceFeedIn: usdcUsdDataFeedAddress,
+            priceFeedOut: cbEthUsdDataFeedAddress
+        });
+
+        return Uniswap.swapUSDCAndAEROToCbETH(params, amountInUSDC, amountInAERO);
     }
 
     function _swapAEROToUSDC(uint256 amountIn) internal returns (uint256 amountOut) {
-        amountOut = _swap(AERO, asset(), 3000, 500, amountIn);
+        Uniswap.SwapParams memory params = Uniswap.SwapParams({
+            router: swapRouter,
+            tokenIn: AERO,
+            tokenOut: address(asset()),
+            WETH9: WETH9,
+            fee1: 3000,
+            fee2: 500,
+            amountIn: amountIn,
+            priceFeedIn: aeroUsdDataFeedAddress,
+            priceFeedOut: usdcUsdDataFeedAddress
+        });
+
+        amountOut = Uniswap.swap(params);
     }
 
     function _swapUSDCToAERO(uint256 amountIn) internal returns (uint256 amountOut) {
-        amountOut = _swap(asset(), AERO, 500, 3000, amountIn);
+        Uniswap.SwapParams memory params = Uniswap.SwapParams({
+            router: swapRouter,
+            tokenIn: asset(),
+            tokenOut: AERO,
+            WETH9: WETH9,
+            fee1: 500,
+            fee2: 3000,
+            amountIn: amountIn,
+            priceFeedIn: usdcUsdDataFeedAddress,
+            priceFeedOut: aeroUsdDataFeedAddress
+        });
+
+        amountOut = Uniswap.swap(params);
     }
 
     function totalAssets() public view override returns (uint256) {

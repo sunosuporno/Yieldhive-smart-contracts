@@ -85,7 +85,7 @@ contract Vault_StrategyTest is Test {
     }
 
     // Add more test functions as needed
-    function testDeposit() public {
+    function testDepositOnly() public {
         // Record initial states
         uint256 initialUserBalance = usdc.balanceOf(user);
         uint256 initialVaultBalance = usdc.balanceOf(address(vaultStrategy));
