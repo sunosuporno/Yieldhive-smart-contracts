@@ -402,12 +402,6 @@ contract VaultStrategy is
         previousAUSDCBalance = currentAUSDCBalance;
         previousVariableDebtBalance = currentVariableDebtBalance;
 
-        // // Get initial balances
-        // uint256 initialAeroBalance = IERC20(AERO).balanceOf(address(this));
-        // uint256 initialUsdcBalance = IERC20(asset()).balanceOf(address(this));
-        // console.log("initialAeroBalance", initialAeroBalance);
-        // console.log("initialUsdcBalance", initialUsdcBalance);
-
         // Claim fees from Aerodrome Pool
         (uint256 claimedUsdc, uint256 claimedAero) = aerodromePool.claimFees();
         console.log("claimedUsdc", claimedUsdc);
@@ -420,38 +414,6 @@ contract VaultStrategy is
 
         // Target a 50-50 split between AERO and USDC
         uint256 totalValueInUsd = aeroValueInUsd + usdcValueInUsd;
-        uint256 targetValuePerToken = totalValueInUsd / 2;
-
-        // if (aeroValueInUsd > targetValuePerToken) {
-        //     // We have too much AERO, swap the excess to USDC
-        //     console.log("We have too much AERO, swap the excess to USDC");
-        //     uint256 excessAeroValue = aeroValueInUsd - targetValuePerToken;
-        //     uint256 aeroToSwap = (excessAeroValue * 10 ** 18) / aeroPrice;
-        //     if (aeroToSwap > 0) {
-        //         claimedUsdc += _swapAEROToUSDC(aeroToSwap);
-        //     }
-        // } else if (usdcValueInUsd > targetValuePerToken) {
-        //     // We have too much USDC, swap the excess to AERO
-        //     console.log("We have too much USDC, swap the excess to AERO");
-        //     uint256 excessUsdcValue = usdcValueInUsd - targetValuePerToken;
-        //     uint256 usdcToSwap = (excessUsdcValue * 10 ** 6) / usdcPrice;
-        //     if (usdcToSwap > 0) {
-        //         claimedAero += _swapUSDCToAERO(usdcToSwap);
-        //     }
-        // }
-
-        // uint256 currentAeroBalance = IERC20(AERO).balanceOf(address(this));
-        // uint256 currentUSDCBalance = IERC20(asset()).balanceOf(address(this));
-        // console.log("currentAeroBalance", currentAeroBalance);
-        // console.log("currentUSDCBalance", currentUSDCBalance);
-
-        // // Calculate claimed rewards
-        // uint256 claimedAero = currentAeroBalance - initialAeroBalance;
-        // uint256 claimedUsdc = currentUSDCBalance - initialUsdcBalance;
-
-        // if (currentAeroBalance > 0) {
-        //     currentUSDCBalance += _swapAEROToUSDC(currentAeroBalance);
-        // }
 
         // Calculate total rewards in USDC terms using the claimed amounts directly
         uint256 totalRewardsInUSDC = (usdcValueInUsd + aeroValueInUsd) * 1e6 / (usdcPrice);
@@ -604,40 +566,9 @@ contract VaultStrategy is
         amountOut = _swap(asset(), AERO, 500, 3000, amountIn);
     }
 
-    // function _swapUSDCToCbETH(
-    //     uint256 amountIn
-    // ) internal returns (uint256 amountOut) {
-    //     amountOut = _swap(asset(), cbETH, 500, 500, amountIn);
-    // }
-
     function totalAssets() public view override returns (uint256) {
         return _totalAccountedAssets;
     }
-
-    // function getPricePyth(bytes32[] memory dataFeedAddresses) public payable returns (uint256[] memory) {
-    //     bytes[] memory priceUpdate = pythPriceUpdater.getPricePyth();
-    //     uint256 fee = pyth.getUpdateFee(priceUpdate);
-    //     pyth.updatePriceFeeds{value: fee}(priceUpdate);
-
-    //     uint256[] memory prices = new uint256[](priceFeedIds.length);
-
-    //     // Read the current price from each price feed if it is less than 60 seconds old.
-    //     for (uint256 i = 0; i < priceFeedIds.length; i++) {
-    //         PythStructs.Price memory pythPrice = pyth.getPriceNoOlderThan(priceFeedIds[i], 120);
-
-    //         // Convert the price to a uint256 value
-    //         // The price is stored as a signed integer with a specific exponent
-    //         // We need to adjust it to get the actual price in a common unit (e.g., 18 decimals)
-    //         int64 price = pythPrice.price;
-
-    //         // Convert the price to a positive value with 18 decimals
-    //         uint256 adjustedPrice = uint256(uint64(price));
-
-    //         prices[i] = adjustedPrice;
-    //     }
-
-    //     return prices;
-    // }
 
     function getChainlinkDataFeedLatestAnswer(address[] memory dataFeeds) public payable returns (uint256[] memory) {
         // Create array to store prices
@@ -746,61 +677,6 @@ contract VaultStrategy is
     {
         return super.redeem(shares, receiver, owner);
     }
-
-    // Add a new function to invest accumulated funds
-    // function investAccumulatedFunds() external onlyOwner nonReentrant {
-    //     require(accumulatedDeposits > 0, "No accumulated deposits to invest");
-
-    //     uint256 amountToInvest = accumulatedDeposits;
-    //     accumulatedDeposits = 0;
-
-    //     _investFunds(amountToInvest, asset());
-    // }
-
-    // function processWithdrawalRequests() external onlyOwner nonReentrant {
-    //     uint256 totalAssetsToWithdraw = 0;
-    //     uint256 availableAssets = 0;
-
-    //     // Calculate total assets to withdraw
-    //     for (uint256 i = 0; i < withdrawalRequestors.length(); i++) {
-    //         address requestor = withdrawalRequestors.at(i);
-    //         WithdrawalRequest storage request = withdrawalRequests[requestor];
-
-    //         if (!request.fulfilled) {
-    //             totalAssetsToWithdraw += request.assets;
-    //         }
-    //     }
-
-    //     // Withdraw funds if needed
-    //     if (totalAssetsToWithdraw > 0) {
-    //         _withdrawFunds(totalAssetsToWithdraw);
-    //         availableAssets = IERC20(asset()).balanceOf(address(this)) - accumulatedDeposits;
-    //     }
-
-    //     uint256 j = 0;
-    //     while (j < withdrawalRequestors.length() && totalAssetsToWithdraw > 0 && availableAssets > 0) {
-    //         address requestor = withdrawalRequestors.at(j);
-    //         WithdrawalRequest storage request = withdrawalRequests[requestor];
-
-    //         if (!request.fulfilled) {
-    //             uint256 toDistribute = Math.min(request.assets, Math.min(totalAssetsToWithdraw, availableAssets));
-
-    //             availableAssets -= toDistribute;
-    //             totalAssetsToWithdraw -= toDistribute;
-    //             IERC20(asset()).safeTransfer(requestor, toDistribute);
-    //             if (toDistribute == request.assets) {
-    //                 request.fulfilled = true;
-    //                 withdrawalRequestors.remove(requestor);
-    //                 // Don't increment i as we've removed an element
-    //             } else {
-    //                 request.assets -= toDistribute;
-    //                 j++;
-    //             }
-    //         } else {
-    //             j++;
-    //         }
-    //     }
-    // }
 
     // Add pause and unpause functions
     function pause() external onlyOwner {
