@@ -166,7 +166,7 @@ contract VaultStrategy is
             withdrawnAmount = IERC20(asset()).balanceOf(address(this)) - balanceBefore;
 
             // Check and rebalance if necessary
-            uint256 healthFactor = calculateHealthFactor();
+            uint256 healthFactor = Aave.calculateHealthFactor(aavePool, address(this));
             uint256 currentHealthFactor4Dec = healthFactor / 1e14;
             console.log("currentHealthFactor4Dec", currentHealthFactor4Dec);
             uint256 bufferedTargetHealthFactor = TARGET_HEALTH_FACTOR + HEALTH_FACTOR_BUFFER;
@@ -289,14 +289,8 @@ contract VaultStrategy is
         }
     }
 
-    function calculateHealthFactor() internal view returns (uint256) {
-        (,,,,, uint256 healthFactor) = aavePool.getUserAccountData(address(this));
-
-        return healthFactor;
-    }
-
     function checkAndRebalance() external payable onlyRole(REBALANCER_ROLE) {
-        uint256 healthFactor = calculateHealthFactor();
+        uint256 healthFactor = Aave.calculateHealthFactor(aavePool, address(this));
         uint256 currentHealthFactor4Dec = healthFactor / 1e14;
         uint256 bufferedTargetHealthFactor = TARGET_HEALTH_FACTOR + HEALTH_FACTOR_BUFFER;
         uint256 maxHealthFactor = TARGET_HEALTH_FACTOR * 2; // Example: 2.2 (twice the target)
