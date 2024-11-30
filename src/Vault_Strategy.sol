@@ -247,77 +247,43 @@ contract VaultStrategy is
     }
 
     function _rebalancePosition(uint256 additionalAmountNeeded) internal {
-        // Only proceed with rebalancing if we actually need additional funds
         if (additionalAmountNeeded == 0) {
             console.log("No rebalancing needed - sufficient funds in Aave");
             return;
         }
 
+        // Get prices
         address[] memory dataFeedAddresses = new address[](3);
         dataFeedAddresses[0] = cbEthUsdDataFeedAddress;
         dataFeedAddresses[1] = usdcUsdDataFeedAddress;
         dataFeedAddresses[2] = aeroUsdDataFeedAddress;
         uint256[] memory prices = getChainlinkDataFeedLatestAnswer(dataFeedAddresses);
-        uint256 cbEthPriceInUsd = prices[0];
-        uint256 usdcPriceInUsd = prices[1];
-        uint256 aeroPriceInUsd = prices[2];
 
-        uint256 amountToFreeUp = additionalAmountNeeded;
-        console.log("amountToFreeUp", amountToFreeUp);
+        // Calculate rebalance amounts
+        Aave.RebalanceParams memory params = Aave.RebalanceParams({
+            pool: aavePool,
+            assetToRepay: cbETH,
+            repayAmount: additionalAmountNeeded,
+            targetHealthFactor: TARGET_HEALTH_FACTOR,
+            healthFactorBuffer: HEALTH_FACTOR_BUFFER
+        });
 
-        // Check if we need to rebalance for health factor
-        (uint256 totalCollateralBase, uint256 totalDebtBase,, uint256 currentLiquidationThreshold,,) =
-            aavePool.getUserAccountData(address(this));
+        Aave.RebalanceResult memory result = Aave.calculateRebalanceAmount(params);
 
-        console.log("totalCollateralBase", totalCollateralBase);
-        console.log("totalDebtBase", totalDebtBase);
-        console.log("currentLiquidationThreshold", currentLiquidationThreshold);
-
-        uint256 bufferedTargetHealthFactor = TARGET_HEALTH_FACTOR + HEALTH_FACTOR_BUFFER;
-        console.log("bufferedTargetHealthFactor", bufferedTargetHealthFactor);
-
-        // Fix: Adjust calculation order and decimal handling
-        uint256 healthFactorAdjustment = (
-            (totalDebtBase * bufferedTargetHealthFactor) - (totalCollateralBase * currentLiquidationThreshold)
-        ) / (bufferedTargetHealthFactor * 100);
-
-        // If health factor needs adjustment, add it to amount to free up
-        if (healthFactorAdjustment > 0) {
-            console.log("Additional rebalancing needed for health factor:", healthFactorAdjustment);
-            amountToFreeUp += healthFactorAdjustment;
-            console.log("amountToFreeUp after health factor adjustment", amountToFreeUp);
-        }
-
-        // Only proceed with LP operations if we need to free up funds
-        if (amountToFreeUp > 0) {
-            uint256 cbEthEquivalent = (amountToFreeUp * 1e18 * usdcPriceInUsd) / (cbEthPriceInUsd * 1e6);
-            console.log("cbEthEquivalent", cbEthEquivalent);
-
-            // Convert cbEthEquivalent to USD value with 8 decimals
-            uint256 cbEthValueInUsd = (cbEthEquivalent * cbEthPriceInUsd) / 1e18;
-            console.log("cbEthValueInUsd", cbEthValueInUsd);
-
-            // Calculate how much to withdraw from Aerodrome Pool
-            uint256 lpTokensToBurn = _calculateLPTokensToWithdraw(cbEthValueInUsd, usdcPriceInUsd, aeroPriceInUsd);
-            console.log("lpTokensToBurn", lpTokensToBurn);
+        if (result.totalAmountToFreeUp > 0) {
+            uint256 cbEthEquivalent = (result.totalAmountToFreeUp * 1e18 * prices[1]) / (prices[0] * 1e6);
+            uint256 lpTokensToBurn =
+                _calculateLPTokensToWithdraw((cbEthEquivalent * prices[0]) / 1e18, prices[1], prices[2]);
 
             if (lpTokensToBurn > 0) {
                 IERC20(address(aerodromePool)).transfer(address(aerodromePool), lpTokensToBurn);
                 (uint256 usdc, uint256 aero) = aerodromePool.burn(address(this));
-                console.log("usdc received", usdc);
-                console.log("aero received", aero);
-
-                // Swap USDC and AERO to cbETH
                 uint256 cbEthReceived = _swapUSDCAndAEROToCbETH(usdc, aero);
-                console.log("cbEthReceived", cbEthReceived);
 
-                // Repay cbETH debt
-                IERC20(cbETH).approve(address(aavePool), cbEthReceived);
-                aavePool.repay(cbETH, cbEthReceived, 2, address(this));
+                Aave.repayDebt(aavePool, cbETH, cbEthReceived, address(this));
 
-                // Emit the rebalancing event
                 emit PositionRebalanced(
-                    additionalAmountNeeded, amountToFreeUp, lpTokensToBurn, usdc, aero, cbEthReceived
+                    additionalAmountNeeded, result.totalAmountToFreeUp, lpTokensToBurn, usdc, aero, cbEthReceived
                 );
             }
         }
