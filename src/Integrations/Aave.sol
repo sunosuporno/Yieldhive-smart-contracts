@@ -70,46 +70,6 @@ library Aave {
     address constant cbEthUsdDataFeedAddress = 0xd7818272B9e248357d13057AAb0B417aF31E817d;
     address constant aeroUsdDataFeedAddress = 0x4EC5970fC728C5f65ba413992CD5fF6FD70fcfF0;
 
-    // function supplyAndBorrow(SupplyAndBorrowParams memory params)
-    //     external
-    //     returns (SupplyAndBorrowResult memory result)
-    // {
-    //     console.log("\nSupply and Borrow Running");
-    //     // 1. Supply asset
-    //     IERC20(params.assetToSupply).approve(address(params.pool), params.supplyAmount);
-    //     params.pool.supply(params.assetToSupply, params.supplyAmount, params.onBehalfOf, 0);
-
-    //     // 2. Calculate borrow amount
-    //     // Convert the amount of USDC supplied to 18 decimals
-    //     uint256 usdcAmountIn18Decimals = params.supplyAmount * 10 ** 12;
-    //     // Finding total price of the asset supplied in USD (now correctly using 10**8)
-    //     uint256 usdcAmountIn18DecimalsInUSD = (usdcAmountIn18Decimals * params.supplyPriceUSD) / 10 ** 8;
-    //     console.log("usdcAmountIn18DecimalsInUSD: %s", usdcAmountIn18DecimalsInUSD);
-    //     uint256 supplyAmountInUSD = (params.supplyAmount * params.supplyPriceUSD) / 10 ** 6;
-    //     console.log("supplyAmountInUSD: %s", supplyAmountInUSD);
-
-    //     // 3. Get LTV from Aave
-    //     (, uint256 ltv,,,,,,,,) = params.dataProvider.getReserveConfigurationData(params.assetToSupply);
-    //     console.log("ltv: %s", ltv);
-    //     // 4. Calculate maximum borrow amount
-    //     uint256 maxLoanAmountInUSD = (supplyAmountInUSD * ltv) / 10 ** 4;
-    //     console.log("maxLoanAmountInUSD: %s", maxLoanAmountInUSD);
-    //     uint256 assetAbleToBorrow = (maxLoanAmountInUSD * 10 ** 18) / params.borrowPriceUSD;
-    //     console.log("assetAbleToBorrow: %s", assetAbleToBorrow);
-    //     uint256 safeAmount = (assetAbleToBorrow * params.safetyFactor) / 100;
-    //     console.log("safeAmount: %s", safeAmount);
-    //     // 5. Borrow asset
-    //     params.pool.borrow(params.assetToBorrow, safeAmount, 2, 0, params.onBehalfOf);
-
-    //     // 6. Get final balances
-    //     result.suppliedAmount = params.supplyAmount;
-    //     result.borrowedAmount = safeAmount;
-    //     result.aTokenBalance = IERC20(params.assetToSupply).balanceOf(params.onBehalfOf);
-    //     result.debtTokenBalance = IERC20(params.assetToBorrow).balanceOf(params.onBehalfOf);
-
-    //     return result;
-    // }
-
     function supplyAndBorrow(uint256 amount, address recipient, uint256 usdcPriceInUSD, uint256 cbEthPriceInUSD)
         external
         returns (uint256 previousAUSDCBalance, uint256 previousVariableDebtBalance)
