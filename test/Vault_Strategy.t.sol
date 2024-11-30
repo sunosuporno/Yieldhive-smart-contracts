@@ -1008,7 +1008,7 @@ contract Vault_StrategyTest is Test {
         vm.stopPrank();
     }
 
-    function testHarvestReinvestAndReport() public {
+    function testHarvestReinvestAndReports() public {
         // Initial setup - deposit 10,000 USDC
         uint256 depositAmount = 10_000e6; // 10,000 USDC
         deal(address(usdc), user, depositAmount);

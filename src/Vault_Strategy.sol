@@ -226,6 +226,7 @@ contract VaultStrategy is
             dataProvider: aaveProtocolDataProvider,
             assetToSupply: assetAddress,
             assetToBorrow: cbETH,
+            onBehalfOf: address(this),
             supplyAmount: amount,
             supplyPriceUSD: prices[0],
             borrowPriceUSD: prices[1],
@@ -235,8 +236,10 @@ contract VaultStrategy is
         Aave.SupplyAndBorrowResult memory result = Aave.supplyAndBorrow(params);
 
         // Store previous balances
-        previousAUSDCBalance = result.aTokenBalance;
-        previousVariableDebtBalance = result.debtTokenBalance;
+        previousAUSDCBalance = IERC20(aUSDC).balanceOf(address(this));
+        previousVariableDebtBalance = IERC20(variableDebtCbETH).balanceOf(address(this));
+        console.log("previousAUSDCBalance", previousAUSDCBalance);
+        console.log("previousVariableDebtBalance", previousVariableDebtBalance);
 
         // Continue with Aerodrome integration
         (uint256 usdcReceived, uint256 aeroReceived) = _swapcbETHToUSDCAndAERO(result.borrowedAmount);
@@ -371,80 +374,57 @@ contract VaultStrategy is
     }
 
     function harvestReinvestAndReport() external onlyOwner nonReentrant {
-        // Get prices from Pyth Network
+        // Get prices
         address[] memory dataFeedAddresses = new address[](3);
         dataFeedAddresses[0] = cbEthUsdDataFeedAddress;
         dataFeedAddresses[1] = usdcUsdDataFeedAddress;
         dataFeedAddresses[2] = aeroUsdDataFeedAddress;
         uint256[] memory prices = getChainlinkDataFeedLatestAnswer(dataFeedAddresses);
-        uint256 cbETHPrice = prices[0];
-        uint256 usdcPrice = prices[1];
-        uint256 aeroPrice = prices[2];
+        console.log("previousAUSDCBalance", previousAUSDCBalance);
+        console.log("previousVariableDebtBalance", previousVariableDebtBalance);
 
-        console.log("\nPrices fetched from Chainlink");
+        // Get Aave profits
+        Aave.HarvestResult memory aaveResult = Aave.harvest(
+            Aave.HarvestParams({
+                pool: aavePool,
+                aToken: aUSDC,
+                debtToken: variableDebtCbETH,
+                user: address(this),
+                previousAUSDCBalance: previousAUSDCBalance,
+                previousDebtBalance: previousVariableDebtBalance,
+                cbEthPriceUSD: prices[0],
+                usdcPriceUSD: prices[1]
+            })
+        );
 
-        // Get current balances
-        uint256 currentAUSDCBalance = IERC20(aUSDC).balanceOf(address(this));
-        uint256 currentVariableDebtBalance = IERC20(variableDebtCbETH).balanceOf(address(this));
-        console.log("currentAUSDCBalance", currentAUSDCBalance);
-        console.log("currentVariableDebtBalance", currentVariableDebtBalance);
-        // Calculate the change in balances
-        uint256 borrowedCbETHChange = currentVariableDebtBalance - previousVariableDebtBalance;
-        console.log("borrowedCbETHChange", borrowedCbETHChange);
-        // Calculate the net gain in Aave
-        uint256 suppliedUSDCValueChange = currentAUSDCBalance - previousAUSDCBalance;
-        console.log("suppliedUSDCValueChange", suppliedUSDCValueChange);
-        uint256 borrowedCbETHValueChangeInUSDC = (cbETHPrice * borrowedCbETHChange) / (usdcPrice * 10 ** 12);
-        console.log("borrowedCbETHValueChangeInUSDC", borrowedCbETHValueChangeInUSDC);
-        int256 aaveNetGain = int256(suppliedUSDCValueChange) - int256(borrowedCbETHValueChangeInUSDC);
-        console.log("aaveNetGain", aaveNetGain);
-        // Update the previous balances
-        previousAUSDCBalance = currentAUSDCBalance;
-        previousVariableDebtBalance = currentVariableDebtBalance;
+        // Update stored balances
+        previousAUSDCBalance = aaveResult.newAUSDCBalance;
+        previousVariableDebtBalance = aaveResult.newDebtBalance;
 
-        // Claim fees from Aerodrome Pool
+        // Handle Aerodrome rewards
         (uint256 claimedUsdc, uint256 claimedAero) = aerodromePool.claimFees();
-        console.log("claimedUsdc", claimedUsdc);
-        console.log("claimedAero", claimedAero);
+        uint256 aeroValueInUsd = (claimedAero * prices[2]) / 1e18;
+        uint256 usdcValueInUsd = (claimedUsdc * prices[1]) / 1e6;
+        uint256 totalRewardsInUSDC = ((usdcValueInUsd + aeroValueInUsd) * 1e6) / prices[1];
 
-        uint256 aeroValueInUsd = (claimedAero * aeroPrice) / (10 ** 18); // Adjust for AERO's 18 decimals
-        uint256 usdcValueInUsd = (claimedUsdc * usdcPrice) / (10 ** 6); // Adjust for USDC's 6 decimals
-        console.log("aeroValueInUsd", aeroValueInUsd);
-        console.log("usdcValueInUsd", usdcValueInUsd);
-
-        // Target a 50-50 split between AERO and USDC
-        uint256 totalValueInUsd = aeroValueInUsd + usdcValueInUsd;
-
-        // Calculate total rewards in USDC terms using the claimed amounts directly
-        uint256 totalRewardsInUSDC = (usdcValueInUsd + aeroValueInUsd) * 1e6 / (usdcPrice);
-        console.log("totalRewardsInUSDC", totalRewardsInUSDC);
-
-        // Or even better, use the values we already calculated:
-        // uint256 totalRewardsInUSDC = (usdcValueInUsd + aeroValueInUsd) * 1e6; // Convert back to USDC decimals
-
-        // Calculate total profit, including Aerodrome rewards and Aave net gain
-        int256 totalProfit = int256(totalRewardsInUSDC) + aaveNetGain;
-        console.log("totalProfit", totalProfit);
-        // Only apply fee if there's a positive profit
+        // Calculate total profit and fees
+        int256 totalProfit = int256(totalRewardsInUSDC) + aaveResult.aaveNetGain;
         uint256 strategistFee = 0;
         if (totalProfit > 0) {
             strategistFee = (uint256(totalProfit) * STRATEGIST_FEE_PERCENTAGE) / 10000;
             accumulatedStrategistFee += strategistFee;
         }
 
-        // Calculate net profit after fee
+        // Update accounting
         uint256 netProfit = totalProfit > 0 ? uint256(totalProfit) - strategistFee : 0;
-
-        // Update total accounted assets
         if (totalProfit > 0) {
             _totalAccountedAssets += netProfit;
         } else if (totalProfit < 0) {
             _totalAccountedAssets -= uint256(-totalProfit);
         }
 
-        // Reinvest all rewards in Aerodrome Pool
+        // Reinvest rewards
         if (totalRewardsInUSDC > 0) {
-            // swap all rewards to USDC
             uint256 aeroBal = IERC20(AERO).balanceOf(address(this));
             if (aeroBal > 0) _swapAEROToUSDC(aeroBal);
             uint256 usdcBalance = IERC20(asset()).balanceOf(address(this));
@@ -452,7 +432,13 @@ contract VaultStrategy is
         }
 
         emit HarvestReport(
-            uint256(totalProfit), netProfit, strategistFee, totalRewardsInUSDC, aaveNetGain, claimedAero, claimedUsdc
+            uint256(totalProfit),
+            netProfit,
+            strategistFee,
+            totalRewardsInUSDC,
+            aaveResult.aaveNetGain,
+            claimedAero,
+            claimedUsdc
         );
     }
 
