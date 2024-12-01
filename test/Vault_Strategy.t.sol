@@ -430,8 +430,10 @@ contract Vault_StrategyTest is Test {
 
         uint256 afterWithdrawUserBalance = usdc.balanceOf(user);
         uint256 afterWithdrawTotalSupply = vaultStrategy.totalSupply();
+        uint256 afterWithdrawTotalAssets = vaultStrategy.totalAssets();
         console.log("afterWithdrawUserBalance", afterWithdrawUserBalance);
         console.log("afterWithdrawTotalSupply", afterWithdrawTotalSupply);
+        console.log("afterWithdrawTotalAssets", afterWithdrawTotalAssets);
 
         // Verify final states
         assertApproxEqRel(
@@ -1493,5 +1495,97 @@ contract Vault_StrategyTest is Test {
         // Verify no state changes occurred
         assertEq(vaultStrategy.totalAssets(), totalAssetsBefore, "Total assets should remain unchanged");
         assertEq(vaultStrategy.accumulatedStrategistFee(), 0, "No strategist fee should be accumulated");
+    }
+
+    function testInvariantTotalAssetsZeroWhenNoShares() public {
+        // Initial deposit
+        uint256 depositAmount = 100_000_000; // 100 USDC
+        vm.startPrank(user);
+        vaultStrategy.deposit(depositAmount, user);
+
+        // Verify initial state
+        assertGt(vaultStrategy.totalSupply(), 0, "Should have shares after deposit");
+        assertGt(vaultStrategy.totalAssets(), 0, "Should have assets after deposit");
+
+        // Full withdrawal
+        vaultStrategy.withdraw(depositAmount, user, user);
+        vm.stopPrank();
+
+        // Verify invariant: totalAssets should be 0 when totalSupply is 0
+        assertEq(vaultStrategy.totalSupply(), 0, "Total supply should be 0 after full withdrawal");
+        assertEq(vaultStrategy.totalAssets(), 0, "Total assets should be 0 when total supply is 0");
+    }
+
+    // Additional test to verify the invariant holds after multiple operations
+    function testInvariantTotalAssetsZeroAfterMultipleOperations() public {
+        address user2 = makeAddr("user2");
+        address user3 = makeAddr("user3");
+
+        // Setup multiple users with USDC
+        deal(address(usdc), user, 1000 * 10 ** 6);
+        deal(address(usdc), user2, 1000 * 10 ** 6);
+        deal(address(usdc), user3, 1000 * 10 ** 6);
+
+        // Approve vault for all users
+        vm.prank(user2);
+        usdc.approve(address(vaultStrategy), type(uint256).max);
+        vm.prank(user3);
+        usdc.approve(address(vaultStrategy), type(uint256).max);
+
+        // Multiple deposits and withdrawals
+        vm.startPrank(user);
+        vaultStrategy.deposit(100 * 10 ** 6, user);
+        vm.stopPrank();
+
+        vm.prank(user2);
+        vaultStrategy.deposit(200 * 10 ** 6, user2);
+
+        vm.prank(user3);
+        vaultStrategy.deposit(300 * 10 ** 6, user3);
+
+        // Partial withdrawals
+        vm.prank(user);
+        vaultStrategy.withdraw(50 * 10 ** 6, user, user);
+
+        vm.prank(user2);
+        vaultStrategy.withdraw(100 * 10 ** 6, user2, user2);
+
+        // Full withdrawals
+        vm.prank(user);
+        vaultStrategy.withdraw(50 * 10 ** 6, user, user);
+
+        vm.prank(user2);
+        vaultStrategy.withdraw(100 * 10 ** 6, user2, user2);
+
+        vm.prank(user3);
+        vaultStrategy.withdraw(300 * 10 ** 6, user3, user3);
+
+        // Verify invariant after all operations
+        assertEq(vaultStrategy.totalSupply(), 0, "Total supply should be 0 after all withdrawals");
+        assertEq(vaultStrategy.totalAssets(), 0, "Total assets should be 0 when total supply is 0");
+    }
+
+    // Test invariant after harvest operations
+    function testInvariantTotalAssetsZeroAfterHarvest() public {
+        // Initial deposit
+        uint256 depositAmount = 100_000_000; // 100 USDC
+        vm.startPrank(user);
+        vaultStrategy.deposit(depositAmount, user);
+        vm.stopPrank();
+
+        // Simulate time passing and perform harvest
+        vm.warp(block.timestamp + 30 days);
+        vm.prank(owner);
+        vaultStrategy.harvestReinvestAndReport();
+
+        // Full withdrawal after harvest
+        vm.startPrank(user);
+        uint256 shares = vaultStrategy.balanceOf(user);
+        vaultStrategy.redeem(shares, user, user);
+        vm.stopPrank();
+
+        // Verify invariant after harvest and withdrawal
+        assertEq(vaultStrategy.totalSupply(), 0, "Total supply should be 0 after full withdrawal");
+        assertEq(vaultStrategy.totalAssets(), 0, "Total assets should be 0 when total supply is 0");
     }
 }

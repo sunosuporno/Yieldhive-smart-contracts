@@ -57,6 +57,10 @@ contract VaultStrategy is
     // Add new state variables to keep track of the previous balances
     uint256 public previousAUSDCBalance;
     uint256 public previousVariableDebtBalance;
+    int256 public netDepositedUSDC;
+    int256 public netBorrowedCbETH;
+    uint256 public lastHarvestAUSDCBalance;
+    uint256 public lastHarvestDebtBalance;
 
     // Define the target health factor with 4 decimal places
     uint256 public constant TARGET_HEALTH_FACTOR = 10300; // 1.03 with 4 decimal places
@@ -151,7 +155,7 @@ contract VaultStrategy is
         emit Deposit(caller, receiver, assets, shares);
     }
 
-    function _withdrawFunds(uint256 amount) internal returns (uint256 withdrawnAmount) {
+    function _withdrawFunds(uint256 amount, bool isStrategistFee) internal returns (uint256 withdrawnAmount) {
         console.log("withdrawing funds");
         uint256 maxWithdrawable = getMaxWithdrawableAmount();
         console.log("maxWithdrawable", maxWithdrawable);
@@ -162,7 +166,10 @@ contract VaultStrategy is
 
             console.log("withdrawing from Aave");
             aavePool.withdraw(asset(), amount, address(this));
-
+            if (!isStrategistFee) {
+                netDepositedUSDC -= int256(amount);
+            }
+            console.log("netDepositedUSDC", netDepositedUSDC);
             // Calculate actual withdrawn amount
             withdrawnAmount = IERC20(asset()).balanceOf(address(this)) - balanceBefore;
 
@@ -174,7 +181,7 @@ contract VaultStrategy is
             console.log("currentHealthFactor4Dec", currentHealthFactor4Dec);
             if (currentHealthFactor4Dec < bufferedTargetHealthFactor) {
                 console.log("rebalancing position");
-                _rebalancePosition(0);
+                _rebalancePosition(0, isStrategistFee);
             }
         } else {
             console.log("withdrawing more than maxWithdrawable");
@@ -182,7 +189,10 @@ contract VaultStrategy is
             uint256 balanceBefore = IERC20(asset()).balanceOf(address(this));
 
             aavePool.withdraw(asset(), (maxWithdrawable - 10), address(this));
-
+            if (!isStrategistFee) {
+                netDepositedUSDC -= int256(maxWithdrawable - 10);
+            }
+            console.log("netDepositedUSDC", netDepositedUSDC);
             // Calculate actual withdrawn amount
             withdrawnAmount = IERC20(asset()).balanceOf(address(this)) - balanceBefore;
 
@@ -190,7 +200,7 @@ contract VaultStrategy is
             console.log("withdrew from Aave");
             uint256 additionalAmountNeeded = amount - withdrawnAmount;
             console.log("additionalAmountNeeded", additionalAmountNeeded);
-            _rebalancePosition(additionalAmountNeeded);
+            _rebalancePosition(additionalAmountNeeded, isStrategistFee);
             console.log("rebalanced position");
 
             // After rebalancing, try to withdraw any remaining amount
@@ -200,13 +210,16 @@ contract VaultStrategy is
             console.log("remainingWithdrawal", remainingWithdrawal);
             if (remainingWithdrawal > 0) {
                 console.log("withdrawing remaining amount");
-                balanceBefore = IERC20(asset()).balanceOf(address(this));
 
                 aavePool.withdraw(asset(), (remainingWithdrawal - 10), address(this));
-
+                console.log("withdraw done");
+                if (!isStrategistFee) {
+                    netDepositedUSDC -= int256(amount);
+                }
+                console.log("netDepositedUSDC", netDepositedUSDC);
                 // Add actual withdrawn amount to previous withdrawnAmount
-                withdrawnAmount += IERC20(asset()).balanceOf(address(this)) - balanceBefore;
-
+                withdrawnAmount += remainingWithdrawal - 10;
+                console.log("withdrawnAmount", withdrawnAmount);
                 console.log("withdrawn remaining amount", withdrawnAmount);
                 uint256 balanceofContract = IERC20(asset()).balanceOf(address(this));
                 console.log("balanceofContract", balanceofContract);
@@ -215,67 +228,126 @@ contract VaultStrategy is
     }
 
     function _investFunds(uint256 amount, address assetAddress) internal {
-        // Get prices as before
+        // Get the price of the assets in USD from Pyth Network
         address[] memory dataFeedAddresses = new address[](3);
         dataFeedAddresses[0] = usdcUsdDataFeedAddress;
         dataFeedAddresses[1] = cbEthUsdDataFeedAddress;
         dataFeedAddresses[2] = aeroUsdDataFeedAddress;
         uint256[] memory prices = getChainlinkDataFeedLatestAnswer(dataFeedAddresses);
+        uint256 usdcPriceInUSD = prices[0];
+        uint256 cbEthPriceInUSD = prices[1];
+        uint256 aeroPriceInUSD = prices[2];
+        // approve and supply the asset USDC to the Aave pool
+        IERC20(assetAddress).approve(address(aavePool), amount);
+        aavePool.supply(assetAddress, amount, address(this), 0);
+        netDepositedUSDC += int256(amount);
+        console.log("netDepositedUSDC", netDepositedUSDC);
+        console.log("invested in Aave");
 
-        (previousAUSDCBalance, previousVariableDebtBalance) =
-            Aave.supplyAndBorrow(amount, address(this), prices[0], prices[1]);
-        console.log("previousAUSDCBalance", previousAUSDCBalance);
-        console.log("previousVariableDebtBalance", previousVariableDebtBalance);
+        // Convert the amount of USDC supplied to 18 decimals
+        uint256 usdcAmountIn18Decimals = amount * 10 ** 12;
+        // Finding total price of the asset supplied in USD (now correctly using 10**8)
+        uint256 usdcAmountIn18DecimalsInUSD = (usdcAmountIn18Decimals * usdcPriceInUSD) / 10 ** 8;
+        // Fetching LTV of USDC from Aave
+        (, uint256 ltv,,,,,,,,) = aaveProtocolDataProvider.getReserveConfigurationData(assetAddress);
+        // Calculating the maximum loan amount in USD
+        uint256 maxLoanAmountIn18DecimalsInUSD = (usdcAmountIn18DecimalsInUSD * ltv) / 10 ** 4;
+        // Calculating the maximum amount of cbETH that can be borrowed (now correctly using 10**8)
+        uint256 cbEthAbleToBorrow = (maxLoanAmountIn18DecimalsInUSD * 10 ** 8) / cbEthPriceInUSD;
+        // Borrowing cbETH after calculating a safe amount
+        uint256 safeAmount = (cbEthAbleToBorrow * 95) / 100;
+        aavePool.borrow(cbETH, safeAmount, 2, 0, address(this));
+        netBorrowedCbETH += int256(safeAmount);
+        console.log("netBorrowedCbETH", netBorrowedCbETH);
+        console.log("borrowed cbETH");
+        //calculate aToken And debtToken balances
+        previousAUSDCBalance = IERC20(aUSDC).balanceOf(address(this));
+        previousVariableDebtBalance = IERC20(variableDebtCbETH).balanceOf(address(this));
+
         uint256 cbEthBalance = IERC20(cbETH).balanceOf(address(this));
-        console.log("cbEthBalance", cbEthBalance);
-
-        // Continue with Aerodrome integration
-        (uint256 usdcReceived, uint256 aeroReceived) =
-            Uniswap.swapcbETHToUSDCAndAERO(cbEthBalance, prices[0], prices[1], prices[2]);
+        (uint256 usdcReceived, uint256 aeroReceived) = Uniswap.swapcbETHToUSDCAndAERO(cbEthBalance, usdcPriceInUSD, cbEthPriceInUSD, aeroPriceInUSD);
+        console.log("swapped cbETH to USDC and AERO");
         IERC20(asset()).safeTransfer(address(aerodromePool), usdcReceived);
         IERC20(AERO).safeTransfer(address(aerodromePool), aeroReceived);
         aerodromePool.mint(address(this));
         aerodromePool.skim(address(this));
     }
 
-    function _rebalancePosition(uint256 additionalAmountNeeded) internal {
+    function _rebalancePosition(uint256 additionalAmountNeeded, bool isStrategistFee) internal {
+        // Only proceed with rebalancing if we actually need additional funds
         if (additionalAmountNeeded == 0) {
             console.log("No rebalancing needed - sufficient funds in Aave");
             return;
         }
 
-        // Get prices
         address[] memory dataFeedAddresses = new address[](3);
         dataFeedAddresses[0] = cbEthUsdDataFeedAddress;
         dataFeedAddresses[1] = usdcUsdDataFeedAddress;
         dataFeedAddresses[2] = aeroUsdDataFeedAddress;
         uint256[] memory prices = getChainlinkDataFeedLatestAnswer(dataFeedAddresses);
+        uint256 cbEthPriceInUsd = prices[0];
+        uint256 usdcPriceInUsd = prices[1];
+        uint256 aeroPriceInUsd = prices[2];
 
-        // Calculate rebalance amounts
-        Aave.RebalanceParams memory params = Aave.RebalanceParams({
-            pool: aavePool,
-            assetToRepay: cbETH,
-            repayAmount: additionalAmountNeeded,
-            targetHealthFactor: TARGET_HEALTH_FACTOR,
-            healthFactorBuffer: HEALTH_FACTOR_BUFFER
-        });
+        uint256 amountToFreeUp = additionalAmountNeeded;
+        console.log("amountToFreeUp", amountToFreeUp);
 
-        Aave.RebalanceResult memory result = Aave.calculateRebalanceAmount(params);
+        // Check if we need to rebalance for health factor
+        (uint256 totalCollateralBase, uint256 totalDebtBase,, uint256 currentLiquidationThreshold,,) =
+            aavePool.getUserAccountData(address(this));
 
-        if (result.totalAmountToFreeUp > 0) {
-            uint256 cbEthEquivalent = (result.totalAmountToFreeUp * 1e18 * prices[1]) / (prices[0] * 1e6);
-            uint256 lpTokensToBurn =
-                _calculateLPTokensToWithdraw((cbEthEquivalent * prices[0]) / 1e18, prices[1], prices[2]);
+        console.log("totalCollateralBase", totalCollateralBase);
+        console.log("totalDebtBase", totalDebtBase);
+        console.log("currentLiquidationThreshold", currentLiquidationThreshold);
+
+        uint256 bufferedTargetHealthFactor = TARGET_HEALTH_FACTOR + HEALTH_FACTOR_BUFFER;
+        console.log("bufferedTargetHealthFactor", bufferedTargetHealthFactor);
+
+        // Fix: Adjust calculation order and decimal handling
+        uint256 healthFactorAdjustment = (
+            (totalDebtBase * bufferedTargetHealthFactor) - (totalCollateralBase * currentLiquidationThreshold)
+        ) / (bufferedTargetHealthFactor * 100);
+
+        // If health factor needs adjustment, add it to amount to free up
+        if (healthFactorAdjustment > 0) {
+            console.log("Additional rebalancing needed for health factor:", healthFactorAdjustment);
+            amountToFreeUp += healthFactorAdjustment;
+            console.log("amountToFreeUp after health factor adjustment", amountToFreeUp);
+        }
+
+        // Only proceed with LP operations if we need to free up funds
+        if (amountToFreeUp > 0) {
+            uint256 cbEthEquivalent = (amountToFreeUp * 1e18 * usdcPriceInUsd) / (cbEthPriceInUsd * 1e6);
+            console.log("cbEthEquivalent", cbEthEquivalent);
+
+            // Convert cbEthEquivalent to USD value with 8 decimals
+            uint256 cbEthValueInUsd = (cbEthEquivalent * cbEthPriceInUsd) / 1e18;
+            console.log("cbEthValueInUsd", cbEthValueInUsd);
+
+            // Calculate how much to withdraw from Aerodrome Pool
+            uint256 lpTokensToBurn = _calculateLPTokensToWithdraw(cbEthValueInUsd, usdcPriceInUsd, aeroPriceInUsd);
+            console.log("lpTokensToBurn", lpTokensToBurn);
 
             if (lpTokensToBurn > 0) {
                 IERC20(address(aerodromePool)).transfer(address(aerodromePool), lpTokensToBurn);
                 (uint256 usdc, uint256 aero) = aerodromePool.burn(address(this));
-                uint256 cbEthReceived = Uniswap.swapUSDCAndAEROToCbETH(usdc, aero, prices[0], prices[1], prices[2]);
+                console.log("usdc received", usdc);
+                console.log("aero received", aero);
 
-                Aave.repayDebt(aavePool, cbETH, cbEthReceived, address(this));
+                // Swap USDC and AERO to cbETH
+                uint256 cbEthReceived = Uniswap.swapUSDCAndAEROToCbETH(usdc, aero, cbEthPriceInUsd, usdcPriceInUsd, aeroPriceInUsd);
+                console.log("cbEthReceived", cbEthReceived);
 
+                // Repay cbETH debt
+                IERC20(cbETH).approve(address(aavePool), cbEthReceived);
+                aavePool.repay(cbETH, cbEthReceived, 2, address(this));
+                if (!isStrategistFee) {
+                    netBorrowedCbETH -= int256(cbEthReceived);
+                }
+
+                // Emit the rebalancing event
                 emit PositionRebalanced(
-                    additionalAmountNeeded, result.totalAmountToFreeUp, lpTokensToBurn, usdc, aero, cbEthReceived
+                    additionalAmountNeeded, amountToFreeUp, lpTokensToBurn, usdc, aero, cbEthReceived
                 );
             }
         }
@@ -288,7 +360,7 @@ contract VaultStrategy is
         uint256 maxHealthFactor = TARGET_HEALTH_FACTOR * 2; // Example: 2.2 (twice the target)
 
         if (currentHealthFactor4Dec < bufferedTargetHealthFactor) {
-            _rebalancePosition(0);
+            _rebalancePosition(0, false);
         } else if (currentHealthFactor4Dec > maxHealthFactor) {
             _investIdleFunds();
         }
@@ -365,71 +437,106 @@ contract VaultStrategy is
     }
 
     function harvestReinvestAndReport() external onlyOwner nonReentrant {
-        // Get prices
+        // Get prices from Pyth Network
         address[] memory dataFeedAddresses = new address[](3);
         dataFeedAddresses[0] = cbEthUsdDataFeedAddress;
         dataFeedAddresses[1] = usdcUsdDataFeedAddress;
         dataFeedAddresses[2] = aeroUsdDataFeedAddress;
         uint256[] memory prices = getChainlinkDataFeedLatestAnswer(dataFeedAddresses);
-        console.log("previousAUSDCBalance", previousAUSDCBalance);
-        console.log("previousVariableDebtBalance", previousVariableDebtBalance);
+        uint256 cbETHPrice = prices[0];
+        uint256 usdcPrice = prices[1];
+        uint256 aeroPrice = prices[2];
 
-        // Get Aave profits
-        Aave.HarvestResult memory aaveResult = Aave.harvest(
-            Aave.HarvestParams({
-                pool: aavePool,
-                aToken: aUSDC,
-                debtToken: variableDebtCbETH,
-                user: address(this),
-                previousAUSDCBalance: previousAUSDCBalance,
-                previousDebtBalance: previousVariableDebtBalance,
-                cbEthPriceUSD: prices[0],
-                usdcPriceUSD: prices[1]
-            })
-        );
+        console.log("\nHarvest Running");
 
-        // Update stored balances
-        previousAUSDCBalance = aaveResult.newAUSDCBalance;
-        previousVariableDebtBalance = aaveResult.newDebtBalance;
+        // Get current balances
+        uint256 currentAUSDCBalance = IERC20(aUSDC).balanceOf(address(this));
+        uint256 currentVariableDebtBalance = IERC20(variableDebtCbETH).balanceOf(address(this));
+        console.log("currentAUSDCBalance", currentAUSDCBalance);
+        console.log("currentVariableDebtBalance", currentVariableDebtBalance);
+        // Calculate changes since last harvest (could be negative)
+        int256 aUSDCBalanceChange = int256(currentAUSDCBalance) - int256(lastHarvestAUSDCBalance);
+        int256 debtBalanceChange = int256(currentVariableDebtBalance) - int256(lastHarvestDebtBalance);
+        console.log("aUSDCBalanceChange", aUSDCBalanceChange);
+        console.log("debtBalanceChange", debtBalanceChange);
+        // Calculate net deposits/borrows since last harvest (could be negative)
+        int256 netDepositChange = int256(netDepositedUSDC) - int256(lastHarvestAUSDCBalance);
+        int256 netBorrowChange = int256(netBorrowedCbETH) - int256(lastHarvestDebtBalance);
+        console.log("netDepositChange", netDepositChange);
+        console.log("netBorrowChange", netBorrowChange);
+        // Calculate actual interest earned/paid
+        int256 actualUSDCInterest = aUSDCBalanceChange - netDepositChange;
+        int256 actualDebtIncrease = debtBalanceChange - netBorrowChange;
+        console.log("actualUSDCInterest", actualUSDCInterest);
+        console.log("actualDebtIncrease", actualDebtIncrease);
+        // Convert debt to USDC terms (convert to positive uint256 first if negative)
+        uint256 debtIncreaseInUSDC;
+        if (actualDebtIncrease > 0) {
+            debtIncreaseInUSDC = (uint256(actualDebtIncrease) * cbETHPrice) / (usdcPrice * 10 ** 12);
+            console.log("debtIncreaseInUSDC", debtIncreaseInUSDC);
+        } else {
+            debtIncreaseInUSDC = (uint256(-actualDebtIncrease) * cbETHPrice) / (usdcPrice * 10 ** 12);
+            console.log("debtIncreaseInUSDC", debtIncreaseInUSDC);
+        }
+        
+        // Calculate net gain
+        int256 aaveNetGain = actualUSDCInterest - (actualDebtIncrease > 0 ? int256(debtIncreaseInUSDC) : -int256(debtIncreaseInUSDC));
+        console.log("aaveNetGain", aaveNetGain);
+        // Update state for next harvest
+        lastHarvestAUSDCBalance = currentAUSDCBalance;
+        lastHarvestDebtBalance = currentVariableDebtBalance;
 
-        // Handle Aerodrome rewards
+        // Claim fees from Aerodrome Pool
         (uint256 claimedUsdc, uint256 claimedAero) = aerodromePool.claimFees();
-        uint256 aeroValueInUsd = (claimedAero * prices[2]) / 1e18;
-        uint256 usdcValueInUsd = (claimedUsdc * prices[1]) / 1e6;
-        uint256 totalRewardsInUSDC = ((usdcValueInUsd + aeroValueInUsd) * 1e6) / prices[1];
+        console.log("claimedUsdc", claimedUsdc);
+        console.log("claimedAero", claimedAero);
 
-        // Calculate total profit and fees
-        int256 totalProfit = int256(totalRewardsInUSDC) + aaveResult.aaveNetGain;
+        uint256 aeroValueInUsd = (claimedAero * aeroPrice) / (10 ** 18); // Adjust for AERO's 18 decimals
+        uint256 usdcValueInUsd = (claimedUsdc * usdcPrice) / (10 ** 6); // Adjust for USDC's 6 decimals
+        console.log("aeroValueInUsd", aeroValueInUsd);
+        console.log("usdcValueInUsd", usdcValueInUsd);
+
+        // Calculate total rewards in USDC terms using the claimed amounts directly
+        uint256 totalRewardsInUSDC = (usdcValueInUsd + aeroValueInUsd) * 1e6 / (usdcPrice);
+        console.log("totalRewardsInUSDC", totalRewardsInUSDC);
+
+        // Calculate total profit, including Aerodrome rewards and Aave net gain
+        int256 totalProfit = int256(totalRewardsInUSDC) + aaveNetGain;
+        console.log("totalProfit", totalProfit);
+        // Only apply fee if there's a positive profit
         uint256 strategistFee = 0;
         if (totalProfit > 0) {
             strategistFee = (uint256(totalProfit) * STRATEGIST_FEE_PERCENTAGE) / 10000;
             accumulatedStrategistFee += strategistFee;
         }
 
-        // Update accounting
+        // Calculate net profit after fee
         uint256 netProfit = totalProfit > 0 ? uint256(totalProfit) - strategistFee : 0;
+
+        // Update total accounted assets
         if (totalProfit > 0) {
             _totalAccountedAssets += netProfit;
         } else if (totalProfit < 0) {
             _totalAccountedAssets -= uint256(-totalProfit);
         }
 
-        // Reinvest rewards
+        // Reinvest all rewards in Aerodrome Pool
         if (totalRewardsInUSDC > 0) {
+            // swap all rewards to USDC
             uint256 aeroBal = IERC20(AERO).balanceOf(address(this));
-            if (aeroBal > 0) Uniswap.swapAEROToUSDC(aeroBal, prices[1], prices[2]);
+            if (aeroBal > 0) Uniswap.swapAEROToUSDC(aeroBal, usdcPrice, aeroPrice);
             uint256 usdcBalance = IERC20(asset()).balanceOf(address(this));
             _investFunds(usdcBalance, address(asset()));
         }
 
+            // After reinvestment, withdraw and transfer strategist fee if any
+    if (strategistFee > 0) {
+        uint256 withdrawnAmount = _withdrawFunds(strategistFee, true);
+            IERC20(asset()).safeTransfer(strategist, withdrawnAmount);
+        }
+
         emit HarvestReport(
-            uint256(totalProfit),
-            netProfit,
-            strategistFee,
-            totalRewardsInUSDC,
-            aaveResult.aaveNetGain,
-            claimedAero,
-            claimedUsdc
+            uint256(totalProfit), netProfit, strategistFee, totalRewardsInUSDC, aaveNetGain, claimedAero, claimedUsdc
         );
     }
 
@@ -592,11 +699,25 @@ contract VaultStrategy is
             _spendAllowance(owner, caller, shares);
         }
 
+        // Update total assets, ensuring we don't leave dust
+        if (shares == totalSupply()) {
+            console.log("full withdrawal");
+            // If this is a full withdrawal, set total assets to 0
+            _totalAccountedAssets = 0;
+        } else {
+            console.log("partial withdrawal");
+            _totalAccountedAssets -= assets;
+        }
+
         _burn(owner, shares);
 
         // Directly withdraw funds
-        uint256 withdrawnAmount = _withdrawFunds(assets);
-        _totalAccountedAssets -= assets;
+        console.log("withdrawing", assets);
+        uint256 withdrawnAmount = _withdrawFunds(assets, false);
+
+        console.log("shares burned", shares);
+
+
 
         // Transfer assets to receiver
         SafeERC20.safeTransfer(IERC20(asset()), receiver, withdrawnAmount);
