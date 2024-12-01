@@ -21,7 +21,6 @@ import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interfaces/AggregatorV3Interface.sol";
 import {console} from "forge-std/Test.sol";
-import {Aave} from "./Integrations/Aave.sol";
 import {Uniswap} from "./Integrations/Uniswap.sol";
 
 contract VaultStrategy is
@@ -174,7 +173,7 @@ contract VaultStrategy is
             withdrawnAmount = IERC20(asset()).balanceOf(address(this)) - balanceBefore;
 
             // Check and rebalance if necessary
-            uint256 healthFactor = Aave.calculateHealthFactor(aavePool, address(this));
+            uint256 healthFactor = calculateHealthFactor();
             uint256 currentHealthFactor4Dec = healthFactor / 1e14;
             console.log("currentHealthFactor4Dec", currentHealthFactor4Dec);
             uint256 bufferedTargetHealthFactor = TARGET_HEALTH_FACTOR + HEALTH_FACTOR_BUFFER;
@@ -354,52 +353,22 @@ contract VaultStrategy is
     }
 
     function checkAndRebalance() external payable onlyRole(REBALANCER_ROLE) {
-        uint256 healthFactor = Aave.calculateHealthFactor(aavePool, address(this));
+        uint256 healthFactor = calculateHealthFactor();
         uint256 currentHealthFactor4Dec = healthFactor / 1e14;
         uint256 bufferedTargetHealthFactor = TARGET_HEALTH_FACTOR + HEALTH_FACTOR_BUFFER;
         uint256 maxHealthFactor = TARGET_HEALTH_FACTOR * 2; // Example: 2.2 (twice the target)
 
         if (currentHealthFactor4Dec < bufferedTargetHealthFactor) {
             _rebalancePosition(0, false);
-        } else if (currentHealthFactor4Dec > maxHealthFactor) {
-            _investIdleFunds();
         }
     }
 
-    function _investIdleFunds() internal {
-        (uint256 totalCollateralBase, uint256 totalDebtBase,, uint256 currentLtv,,) =
-            aavePool.getUserAccountData(address(this));
+    function calculateHealthFactor() internal view returns (uint256) {
+        (,,,,, uint256 healthFactor) = aavePool.getUserAccountData(address(this));
 
-        uint256 targetDebtBase = (totalCollateralBase * currentLtv) / 10000;
-        uint256 additionalBorrowBase = targetDebtBase - totalDebtBase;
-
-        if (additionalBorrowBase > 0) {
-            address[] memory dataFeedAddresses = new address[](3);
-            dataFeedAddresses[0] = usdcUsdDataFeedAddress;
-            dataFeedAddresses[1] = cbEthUsdDataFeedAddress;
-            dataFeedAddresses[2] = aeroUsdDataFeedAddress;
-            uint256[] memory prices = getChainlinkDataFeedLatestAnswer(dataFeedAddresses);
-            uint256 usdcPriceInUSD = prices[0];
-            uint256 cbEthPriceInUSD = prices[1];
-
-            uint256 cbEthToBorrow = (additionalBorrowBase * usdcPriceInUSD) / cbEthPriceInUSD;
-            uint256 safeAmount = (cbEthToBorrow * 95) / 100;
-
-            aavePool.borrow(cbETH, safeAmount, 2, 0, address(this));
-            uint256 cbEthBalance = IERC20(cbETH).balanceOf(address(this));
-            (uint256 usdcReceived, uint256 aeroReceived) =
-                Uniswap.swapcbETHToUSDCAndAERO(cbEthBalance, prices[0], prices[1], prices[2]);
-
-            IERC20(asset()).safeTransfer(address(aerodromePool), usdcReceived);
-            IERC20(AERO).safeTransfer(address(aerodromePool), aeroReceived);
-            aerodromePool.mint(address(this));
-            aerodromePool.skim(address(this));
-
-            _totalAccountedAssets += usdcReceived;
-        }
+        return healthFactor;
     }
 
-    // @audit - check the amnount returned by this function in tests
 
     function _calculateLPTokensToWithdraw(uint256 cbEthValueInUsd, uint256 usdcPriceInUsd, uint256 aeroPriceInUsd)
         internal
@@ -538,32 +507,6 @@ contract VaultStrategy is
         emit HarvestReport(
             uint256(totalProfit), netProfit, strategistFee, totalRewardsInUSDC, aaveNetGain, claimedAero, claimedUsdc
         );
-    }
-
-    function claimStrategistFees(uint256 amount) external nonReentrant {
-        require(msg.sender == strategist, "Only strategist can claim fees");
-        require(accumulatedStrategistFee > 0 && amount < accumulatedStrategistFee, "No fees to claim");
-
-        address[] memory dataFeedAddresses = new address[](3);
-        dataFeedAddresses[0] = usdcUsdDataFeedAddress;
-        dataFeedAddresses[1] = aeroUsdDataFeedAddress;
-        uint256[] memory prices = getChainlinkDataFeedLatestAnswer(dataFeedAddresses);
-
-        (uint256 reserve0,,) = aerodromePool.getReserves();
-        uint256 totalSupplyPoolToken = IERC20(address(aerodromePool)).totalSupply();
-
-        uint256 sharesToBurn = (amount * totalSupplyPoolToken) / reserve0;
-
-        IERC20(address(aerodromePool)).transfer(address(aerodromePool), sharesToBurn);
-        (uint256 usdc, uint256 aero) = aerodromePool.burn(address(this));
-
-        uint256 usdcAmount = Uniswap.swapAEROToUSDC(aero, prices[0], prices[1]) + usdc;
-
-        IERC20(asset()).safeTransfer(strategist, usdcAmount);
-
-        accumulatedStrategistFee -= amount;
-
-        emit StrategistFeeClaimed(amount, accumulatedStrategistFee);
     }
 
     function totalAssets() public view override returns (uint256) {
@@ -725,7 +668,4 @@ contract VaultStrategy is
         emit Withdraw(caller, receiver, owner, withdrawnAmount, shares);
     }
 
-    function upgradeAaveLibrary(address newLibrary) external onlyOwner {
-        aaveLibrary = newLibrary;
-    }
 }
