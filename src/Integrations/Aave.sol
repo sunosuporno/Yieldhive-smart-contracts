@@ -126,11 +126,6 @@ library Aave {
         return result;
     }
 
-    function repayDebt(IPoolAave pool, address asset, uint256 amount, address onBehalfOf) external {
-        IERC20(asset).approve(address(pool), amount);
-        pool.repay(asset, amount, 2, onBehalfOf);
-    }
-
     function calculateHealthFactor(IPoolAave pool, address user) external view returns (uint256) {
         (,,,,, uint256 healthFactor) = pool.getUserAccountData(user);
         return healthFactor;

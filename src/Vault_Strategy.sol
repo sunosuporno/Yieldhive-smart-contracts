@@ -173,7 +173,7 @@ contract VaultStrategy is
             withdrawnAmount = IERC20(asset()).balanceOf(address(this)) - balanceBefore;
 
             // Check and rebalance if necessary
-            uint256 healthFactor = calculateHealthFactor();
+            uint256 healthFactor = this.calculateHealthFactor();
             uint256 currentHealthFactor4Dec = healthFactor / 1e14;
             console.log("currentHealthFactor4Dec", currentHealthFactor4Dec);
             uint256 bufferedTargetHealthFactor = TARGET_HEALTH_FACTOR + HEALTH_FACTOR_BUFFER;
@@ -264,7 +264,8 @@ contract VaultStrategy is
         previousVariableDebtBalance = IERC20(variableDebtCbETH).balanceOf(address(this));
 
         uint256 cbEthBalance = IERC20(cbETH).balanceOf(address(this));
-        (uint256 usdcReceived, uint256 aeroReceived) = Uniswap.swapcbETHToUSDCAndAERO(cbEthBalance, usdcPriceInUSD, cbEthPriceInUSD, aeroPriceInUSD);
+        (uint256 usdcReceived, uint256 aeroReceived) =
+            Uniswap.swapcbETHToUSDCAndAERO(cbEthBalance, usdcPriceInUSD, cbEthPriceInUSD, aeroPriceInUSD);
         console.log("swapped cbETH to USDC and AERO");
         IERC20(asset()).safeTransfer(address(aerodromePool), usdcReceived);
         IERC20(AERO).safeTransfer(address(aerodromePool), aeroReceived);
@@ -334,7 +335,8 @@ contract VaultStrategy is
                 console.log("aero received", aero);
 
                 // Swap USDC and AERO to cbETH
-                uint256 cbEthReceived = Uniswap.swapUSDCAndAEROToCbETH(usdc, aero, cbEthPriceInUsd, usdcPriceInUsd, aeroPriceInUsd);
+                uint256 cbEthReceived =
+                    Uniswap.swapUSDCAndAEROToCbETH(usdc, aero, cbEthPriceInUsd, usdcPriceInUsd, aeroPriceInUsd);
                 console.log("cbEthReceived", cbEthReceived);
 
                 // Repay cbETH debt
@@ -353,22 +355,28 @@ contract VaultStrategy is
     }
 
     function checkAndRebalance() external payable onlyRole(REBALANCER_ROLE) {
-        uint256 healthFactor = calculateHealthFactor();
+        uint256 healthFactor = this.calculateHealthFactor();
         uint256 currentHealthFactor4Dec = healthFactor / 1e14;
         uint256 bufferedTargetHealthFactor = TARGET_HEALTH_FACTOR + HEALTH_FACTOR_BUFFER;
-        uint256 maxHealthFactor = TARGET_HEALTH_FACTOR * 2; // Example: 2.2 (twice the target)
 
         if (currentHealthFactor4Dec < bufferedTargetHealthFactor) {
-            _rebalancePosition(0, false);
+            // Calculate how much we need to rebalance based on current position
+            (uint256 totalCollateralBase, uint256 totalDebtBase,, uint256 currentLiquidationThreshold,,) =
+                aavePool.getUserAccountData(address(this));
+
+            uint256 healthFactorAdjustment = (
+                (totalDebtBase * bufferedTargetHealthFactor) - (totalCollateralBase * currentLiquidationThreshold)
+            ) / (bufferedTargetHealthFactor * 100);
+
+            _rebalancePosition(healthFactorAdjustment, false);
         }
     }
 
-    function calculateHealthFactor() internal view returns (uint256) {
+    function calculateHealthFactor() external view returns (uint256) {
         (,,,,, uint256 healthFactor) = aavePool.getUserAccountData(address(this));
 
         return healthFactor;
     }
-
 
     function _calculateLPTokensToWithdraw(uint256 cbEthValueInUsd, uint256 usdcPriceInUsd, uint256 aeroPriceInUsd)
         internal
@@ -447,9 +455,10 @@ contract VaultStrategy is
             debtIncreaseInUSDC = (uint256(-actualDebtIncrease) * cbETHPrice) / (usdcPrice * 10 ** 12);
             console.log("debtIncreaseInUSDC", debtIncreaseInUSDC);
         }
-        
+
         // Calculate net gain
-        int256 aaveNetGain = actualUSDCInterest - (actualDebtIncrease > 0 ? int256(debtIncreaseInUSDC) : -int256(debtIncreaseInUSDC));
+        int256 aaveNetGain =
+            actualUSDCInterest - (actualDebtIncrease > 0 ? int256(debtIncreaseInUSDC) : -int256(debtIncreaseInUSDC));
         console.log("aaveNetGain", aaveNetGain);
         // Update state for next harvest
         lastHarvestAUSDCBalance = currentAUSDCBalance;
@@ -498,9 +507,9 @@ contract VaultStrategy is
             _investFunds(usdcBalance, address(asset()));
         }
 
-            // After reinvestment, withdraw and transfer strategist fee if any
-    if (strategistFee > 0) {
-        uint256 withdrawnAmount = _withdrawFunds(strategistFee, true);
+        // After reinvestment, withdraw and transfer strategist fee if any
+        if (strategistFee > 0) {
+            uint256 withdrawnAmount = _withdrawFunds(strategistFee, true);
             IERC20(asset()).safeTransfer(strategist, withdrawnAmount);
         }
 
@@ -660,12 +669,9 @@ contract VaultStrategy is
 
         console.log("shares burned", shares);
 
-
-
         // Transfer assets to receiver
         SafeERC20.safeTransfer(IERC20(asset()), receiver, withdrawnAmount);
 
         emit Withdraw(caller, receiver, owner, withdrawnAmount, shares);
     }
-
 }

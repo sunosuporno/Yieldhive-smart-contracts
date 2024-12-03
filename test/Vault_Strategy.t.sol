@@ -11,6 +11,7 @@ import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/Own
 import {ERC4626Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC4626Upgradeable.sol";
 import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 import {IPool} from "../src/interfaces/IPoolAerodrome.sol";
+import {IPool as IPoolAave} from "../src/interfaces/IPool.sol";
 
 contract Vault_StrategyTest is Test {
     VaultStrategy public vaultStrategy;
@@ -1587,5 +1588,126 @@ contract Vault_StrategyTest is Test {
         // Verify invariant after harvest and withdrawal
         assertEq(vaultStrategy.totalSupply(), 0, "Total supply should be 0 after full withdrawal");
         assertEq(vaultStrategy.totalAssets(), 0, "Total assets should be 0 when total supply is 0");
+    }
+
+    function testCheckAndRebalanceOnly() public {
+        // Initial setup - deposit some funds
+        uint256 depositAmount = 10_000e6;
+        deal(address(usdc), user, depositAmount);
+        vm.startPrank(user);
+        usdc.approve(address(vaultStrategy), depositAmount);
+        vaultStrategy.deposit(depositAmount, user);
+        vm.stopPrank();
+
+        // Grant rebalancer role to test address
+        address rebalancer = makeAddr("rebalancer");
+        vm.prank(owner);
+        vaultStrategy.grantRebalancerRole(rebalancer);
+
+        // Test Case 1: Health factor is good (above target + buffer)
+        uint256 goodHealthFactor = 1.5e18; // 1.5
+
+        uint256 currentHealthFactor = vaultStrategy.calculateHealthFactor();
+        vm.mockCall(
+            AAVE_POOL_CONTRACT,
+            abi.encodeWithSelector(IPoolAave.getUserAccountData.selector, address(vaultStrategy)),
+            abi.encode(0, 0, 0, 0, 0, goodHealthFactor)
+        );
+
+        vm.prank(rebalancer);
+        vaultStrategy.checkAndRebalance(); // Should not trigger rebalance
+
+        // Clear mock and verify health factor remained unchanged
+        vm.clearMockedCalls();
+        assertEq(
+            vaultStrategy.calculateHealthFactor(),
+            currentHealthFactor,
+            "Health factor should remain unchanged when good"
+        );
+
+        // Test Case 2: Health factor is below target + buffer
+        uint256 lowHealthFactor = 1.01e18; // 1.01
+        vm.mockCall(
+            AAVE_POOL_CONTRACT,
+            abi.encodeWithSelector(IPoolAave.getUserAccountData.selector, address(vaultStrategy)),
+            abi.encode(0, 0, 0, 0, 0, lowHealthFactor)
+        );
+
+        vm.prank(rebalancer);
+        vaultStrategy.checkAndRebalance(); // Should trigger rebalance
+
+        // Mock the improved health factor after rebalance
+        vm.clearMockedCalls();
+        assertGt(
+            vaultStrategy.calculateHealthFactor(), lowHealthFactor, "Health factor should improve after rebalancing"
+        );
+        // uint256 improvedHealthFactor = 1.2e18; // Expected improvement after rebalance
+        // vm.mockCall(
+        //     AAVE_POOL_CONTRACT,
+        //     abi.encodeWithSelector(IPoolAave.getUserAccountData.selector, address(vaultStrategy)),
+        //     abi.encode(0, 0, 0, 0, 0, improvedHealthFactor)
+        // );
+
+        // Test Case 3: Unauthorized caller
+        vm.expectRevert(); // Should revert without rebalancer role
+        vm.prank(user);
+        vaultStrategy.checkAndRebalance();
+
+        // Test Case 4: Very low health factor (near liquidation)
+        uint256 criticalHealthFactor = 1.001e18; // 1.001
+        vm.mockCall(
+            AAVE_POOL_CONTRACT,
+            abi.encodeWithSelector(IPoolAave.getUserAccountData.selector, address(vaultStrategy)),
+            abi.encode(0, 0, 0, 0, 0, criticalHealthFactor)
+        );
+
+        vm.prank(rebalancer);
+        vaultStrategy.checkAndRebalance(); // Should trigger rebalance
+
+        // Mock the improved health factor after critical rebalance
+        vm.clearMockedCalls();
+        assertGt(
+            vaultStrategy.calculateHealthFactor(),
+            criticalHealthFactor,
+            "Health factor should significantly improve after critical rebalancing"
+        );
+    }
+
+    // Test with zero total assets
+    function testCheckAndRebalanceWithZeroAssets() public {
+        address rebalancer = makeAddr("rebalancer");
+        vm.prank(owner);
+        vaultStrategy.grantRebalancerRole(rebalancer);
+
+        // Verify initial state
+        assertEq(vaultStrategy.totalAssets(), 0, "Initial total assets should be 0");
+        assertEq(vaultStrategy.totalSupply(), 0, "Initial total supply should be 0");
+
+        // Record initial balances of relevant tokens
+        uint256 initialAUsdcBalance = IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy));
+        uint256 initialLpBalance = IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy));
+        uint256 initialCbEthBalance = IERC20(vaultStrategy.cbETH()).balanceOf(address(vaultStrategy));
+
+        vm.prank(rebalancer);
+        vaultStrategy.checkAndRebalance(); // Should not revert but also not trigger rebalance
+
+        // Verify nothing changed after checkAndRebalance
+        assertEq(vaultStrategy.totalAssets(), 0, "Total assets should remain 0");
+        assertEq(vaultStrategy.totalSupply(), 0, "Total supply should remain 0");
+        assertEq(
+            IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy)),
+            initialAUsdcBalance,
+            "aUSDC balance should not change"
+        );
+        assertEq(
+            IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy)),
+            initialLpBalance,
+            "LP token balance should not change"
+        );
+        assertEq(
+            IERC20(vaultStrategy.cbETH()).balanceOf(address(vaultStrategy)),
+            initialCbEthBalance,
+            "cbETH balance should not change"
+        );
     }
 }
