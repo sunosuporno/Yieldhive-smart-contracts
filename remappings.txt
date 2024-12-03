@@ -10,3 +10,4 @@
 @cryptoalgebra/integral-core/=node_modules/@cryptoalgebra/integral-core/
 @cryptoalgebra/integral-periphery/=node_modules/@cryptoalgebra/integral-periphery/
 @api3/contracts/=node_modules/@api3/contracts/
+openzeppelin-foundry-upgrades/=lib/openzeppelin-foundry-upgrades/

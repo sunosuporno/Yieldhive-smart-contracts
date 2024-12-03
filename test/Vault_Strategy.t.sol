@@ -15,12 +15,14 @@ import {IPool as IPoolAave} from "../src/interfaces/IPool.sol";
 import {VaultStrategyV2} from "./Mocks/Vault_StrategyV2.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ITransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
+import {UnsafeUpgrades} from "openzeppelin-foundry-upgrades/src/Upgrades.sol";
+import {IUpgradeableProxy} from "openzeppelin-foundry-upgrades/src/internal/interfaces/IUpgradeableProxy.sol";
 
 contract Vault_StrategyTest is Test {
     VaultStrategy public vaultStrategy;
     VaultStrategyV2 public vaultStrategyV2;
     ProxyAdmin public proxyAdmin;
-    TransparentUpgradeableProxy public proxy;
+    // TransparentUpgradeableProxy public proxy;
     IERC20 public usdc;
     address public user;
     address public owner;
@@ -35,6 +37,7 @@ contract Vault_StrategyTest is Test {
     address constant AERODROME_POOL_CONTRACT = 0x6cDcb1C4A4D1C3C6d054b27AC5B77e89eAFb971d;
     address constant AAVE_ORACLE_CONTRACT = 0x2Cc0Fc26eD4563A5ce5e8bdcfe1A2878676Ae156;
     address constant WETH9 = 0x4200000000000000000000000000000000000006;
+    address proxy;
 
     function setUp() public {
         // Remove the line: vm.createSelectFork("optimism");
@@ -47,33 +50,30 @@ contract Vault_StrategyTest is Test {
         // Deploy VaultStrategy implementation
         VaultStrategy vaultStrategyImplementation = new VaultStrategy();
 
-        // Deploy ProxyAdmin
-        proxyAdmin = new ProxyAdmin(owner);
-
         // Prepare initialization data
-        bytes memory initData = abi.encodeWithSelector(
-            VaultStrategy.initialize.selector,
-            IERC20(ASSET),
-            INITIAL_DEPOSIT,
-            owner,
-            NAME,
-            SYMBOL,
-            AAVE_POOL_CONTRACT,
-            AAVE_PROTOCOL_DATA_PROVIDER_CONTRACT,
-            AAVE_ORACLE_CONTRACT,
-            owner, // strategist
-            AERODROME_POOL_CONTRACT
+        bytes memory initData = abi.encodeCall(
+            VaultStrategy.initialize,
+            (
+                IERC20(ASSET),
+                INITIAL_DEPOSIT,
+                owner, // Make sure this is set as the owner
+                NAME,
+                SYMBOL,
+                AAVE_POOL_CONTRACT,
+                AAVE_PROTOCOL_DATA_PROVIDER_CONTRACT,
+                AAVE_ORACLE_CONTRACT,
+                owner, // strategist
+                AERODROME_POOL_CONTRACT
+            )
         );
 
-        // Deploy TransparentUpgradeableProxy
-        proxy = new TransparentUpgradeableProxy(
-            address(vaultStrategyImplementation),
-            address(proxyAdmin), // Set the ProxyAdmin as the admin of the proxy
-            initData // Your initialization data
-        );
+        // Deploy proxy using UnsafeUpgrades
+        proxy = UnsafeUpgrades.deployUUPSProxy(address(vaultStrategyImplementation), initData);
 
-        // Assign the proxy address to vaultStrategy
-        vaultStrategy = VaultStrategy(address(proxy));
+        vaultStrategy = VaultStrategy(proxy);
+
+        // Verify ownership
+        assertEq(vaultStrategy.owner(), owner, "Owner should be set correctly");
 
         // Set up USDC for the user
         usdc = IERC20(ASSET);
@@ -1702,7 +1702,7 @@ contract Vault_StrategyTest is Test {
         vaultStrategy.checkAndRebalance(); // Should not revert but also not trigger rebalance
 
         // Verify nothing changed after checkAndRebalance
-        assertEq(vaultStrategy.totalAssets(), 0, "Total assets should remain 0");
+        assertEq(vaultStrategy.totalAssets(), 0, "Total assets  should remain 0");
         assertEq(vaultStrategy.totalSupply(), 0, "Total supply should remain 0");
         assertEq(
             IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy)),
@@ -1722,10 +1722,6 @@ contract Vault_StrategyTest is Test {
     }
 
     function testUpgradeAndFunctionality() public {
-        // Verify ownership setup
-        assertEq(proxyAdmin.owner(), owner, "ProxyAdmin should be owned by owner");
-        assertEq(VaultStrategy(address(proxy)).owner(), owner, "Proxy implementation should be owned by owner");
-
         // Initial deposit
         uint256 depositAmount = 10_000e6;
         vm.startPrank(user);
@@ -1735,28 +1731,33 @@ contract Vault_StrategyTest is Test {
         // Deploy V2 implementation
         VaultStrategyV2 implementationV2 = new VaultStrategyV2();
 
-        // Upgrade to V2 using upgradeAndCall with empty bytes for data
+        console.log("Owner address:", vaultStrategy.owner());
+        console.log("Expected owner:", owner);
+        console.log("Test contract address:", address(this));
+
+        // Make sure we're using the correct owner address
+        assertEq(vaultStrategy.owner(), owner, "Owner check before upgrade");
+
+        // Upgrade to V2 using IUpgradeableProxy interface
         vm.prank(owner);
-        proxyAdmin.upgradeAndCall(
-            ITransparentUpgradeableProxy(address(proxy)),
+        IUpgradeableProxy(address(proxy)).upgradeToAndCall(
             address(implementationV2),
-            "" // empty bytes for no function call
+            "" // No initialization data needed
         );
 
         // Cast proxy to V2 to access new functions
         VaultStrategyV2 proxyV2 = VaultStrategyV2(address(proxy));
 
-        // Test new dummy function
+        // Test new functionality
         uint256 dummyResult = proxyV2.dummy(42);
         assertEq(dummyResult, 42, "Dummy function should return the input value");
 
-        // Full withdrawal
+        // Verify existing functionality still works
         vm.startPrank(user);
         uint256 shares = proxyV2.balanceOf(user);
         proxyV2.redeem(shares, user, user);
         vm.stopPrank();
 
-        // Verify user balance and total supply
         assertEq(proxyV2.balanceOf(user), 0, "User should have no shares remaining");
         assertEq(proxyV2.totalSupply(), 0, "Total supply should be zero");
     }
