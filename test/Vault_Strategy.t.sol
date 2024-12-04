@@ -1102,12 +1102,11 @@ contract Vault_StrategyTest is Test {
         uint256 totalAssetsAfter = vaultStrategy.totalAssets();
         console.log("Total assets after harvest:", totalAssetsAfter);
         console.log("Asset increase:", totalAssetsAfter - totalAssetsBefore);
-
+        uint256 strategistBal = usdc.balanceOf(address(owner));
+        console.log("Strategist balance:", strategistBal);
         // Verify total assets increased
         assertGt(totalAssetsAfter, totalAssetsBefore, "Total assets should increase after harvest");
-
-        // Verify strategist fee accumulation
-        assertGt(vaultStrategy.accumulatedStrategistFee(), 0, "Should have accumulated strategist fee");
+        assertGt(strategistBal, 0, "Strategist should have received a fee");
     }
 
     function testHarvestReinvestAndReportWithLoss() public {
@@ -1191,12 +1190,11 @@ contract Vault_StrategyTest is Test {
         uint256 totalAssetsAfter = vaultStrategy.totalAssets();
         console.log("Total assets after harvest:", totalAssetsAfter);
         console.log("Asset change:", int256(totalAssetsAfter) - int256(totalAssetsBefore));
-
+        uint256 strategistBal = usdc.balanceOf(address(owner));
+        console.log("Strategist balance:", strategistBal);
         // Verify total assets decreased
         assertLt(totalAssetsAfter, totalAssetsBefore, "Total assets should decrease after harvest");
-
-        // Verify no strategist fee was accumulated (since there was a loss)
-        assertEq(vaultStrategy.accumulatedStrategistFee(), 0, "Should not have accumulated strategist fee");
+        assertEq(strategistBal, 0, "Strategist should not have received a fee");
     }
 
     function testConsecutiveHarvestsWithAlternatingRewards() public {
@@ -1327,13 +1325,15 @@ contract Vault_StrategyTest is Test {
         vaultStrategy.harvestReinvestAndReport();
 
         uint256 totalAssetsAfterSecond = vaultStrategy.totalAssets();
+        uint256 strategistBal = usdc.balanceOf(address(owner));
         console.log("Total assets after second harvest:", totalAssetsAfterSecond);
         console.log("Asset change (second):", int256(totalAssetsAfterSecond) - int256(totalAssetsBeforeSecond));
+        console.log("Strategist balance:", strategistBal);
 
         // Final assertions
         assertGt(totalAssetsAfterFirst, totalAssetsBeforeFirst, "First harvest should increase total assets");
         assertGt(totalAssetsAfterSecond, totalAssetsBeforeSecond, "Second harvest should increase total assets");
-        assertGt(vaultStrategy.accumulatedStrategistFee(), 0, "Should have accumulated strategist fees");
+        assertGt(strategistBal, 0, "Strategist should have received a fee");
 
         // Compare the two harvests
         uint256 firstHarvestGain = totalAssetsAfterFirst - totalAssetsBeforeFirst;
@@ -1438,7 +1438,7 @@ contract Vault_StrategyTest is Test {
         console.log("Total assets after harvest:", totalAssetsAfterHarvest);
         console.log("Asset increase:", totalAssetsAfterHarvest - totalAssetsBeforeHarvest);
         console.log("Share price after harvest:", shareValueAfterHarvest);
-        console.log("Strategist fee accumulated:", vaultStrategy.accumulatedStrategistFee());
+        console.log("Strategist fee accumulated:", usdc.balanceOf(address(owner)));
 
         // Verify harvest results
         assertGt(totalAssetsAfterHarvest, totalAssetsBeforeHarvest, "Total assets should increase after harvest");
@@ -1505,7 +1505,6 @@ contract Vault_StrategyTest is Test {
 
         // Verify no state changes occurred
         assertEq(vaultStrategy.totalAssets(), totalAssetsBefore, "Total assets should remain unchanged");
-        assertEq(vaultStrategy.accumulatedStrategistFee(), 0, "No strategist fee should be accumulated");
     }
 
     function testInvariantTotalAssetsZeroWhenNoShares() public {
@@ -1991,147 +1990,5 @@ contract Vault_StrategyTest is Test {
         // Verify Bob and Dave have fully withdrawn
         assertEq(vaultStrategy.balanceOf(bob), 0, "Bob should have no shares");
         assertEq(vaultStrategy.balanceOf(dave), 0, "Dave should have no shares");
-    }
-
-    function testCompareHarvestFunctions() public {
-        // Initial setup - deposit 10,000 USDC
-        uint256 depositAmount = 10_000e6; // 10,000 USDC
-        deal(address(usdc), user, depositAmount);
-
-        vm.startPrank(user);
-        usdc.approve(address(vaultStrategy), depositAmount);
-        vaultStrategy.deposit(depositAmount, user);
-        vm.stopPrank();
-
-        // Fast forward time to accumulate rewards (30 days)
-        vm.warp(block.timestamp + 30 days);
-
-        // Setup mocks for the first harvest
-        // Mock aUSDC balance increase (15% APY)
-        uint256 initialAUSDCBalance = IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy));
-        uint256 increaseInSupply = (initialAUSDCBalance * 15) / (12 * 100);
-        uint256 newAUSDCBalance = initialAUSDCBalance + increaseInSupply;
-        vm.mockCall(
-            vaultStrategy.aUSDC(),
-            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
-            abi.encode(newAUSDCBalance)
-        );
-
-        // Mock variable debt balance (2.5% APY)
-        uint256 initialDebtBalance = IERC20(vaultStrategy.variableDebtCbETH()).balanceOf(address(vaultStrategy));
-        uint256 increaseInDebt = (initialDebtBalance * 25) / (12 * 1000);
-        uint256 newDebtBalance = initialDebtBalance + increaseInDebt;
-        vm.mockCall(
-            vaultStrategy.variableDebtCbETH(),
-            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
-            abi.encode(newDebtBalance)
-        );
-
-        // Setup Aerodrome rewards
-        uint256 monthlyRewardValue = (depositAmount * 45) / (12 * 100);
-        uint256 usdcRewards = monthlyRewardValue / 2;
-
-        // Get prices for AERO reward calculation
-        address[] memory dataFeeds = new address[](3);
-        dataFeeds[0] = vaultStrategy.cbEthUsdDataFeedAddress();
-        dataFeeds[1] = vaultStrategy.usdcUsdDataFeedAddress();
-        dataFeeds[2] = vaultStrategy.aeroUsdDataFeedAddress();
-        uint256[] memory prices = vaultStrategy.getChainlinkDataFeedLatestAnswer(dataFeeds);
-        uint256 aeroRewards = ((monthlyRewardValue / 2) * prices[1] * 1e18) / (prices[2] * 1e6);
-
-        // Setup mock for claimFees
-        vm.mockCall(
-            address(vaultStrategy.aerodromePool()),
-            abi.encodeWithSelector(IPool.claimFees.selector),
-            abi.encode(usdcRewards, aeroRewards)
-        );
-
-        // Mock balances
-        deal(address(vaultStrategy.AERO()), address(vaultStrategy), aeroRewards);
-        deal(address(usdc), address(vaultStrategy), usdcRewards);
-
-        // Record state before first harvest
-        uint256 totalAssetsBeforeOld = vaultStrategy.totalAssets();
-        uint256 totalSupplyBeforeOld = vaultStrategy.totalSupply();
-
-        // Run old harvest function
-        vm.prank(owner);
-        vaultStrategy.harvestReinvestAndReport();
-
-        // Record results from old harvest
-        uint256 totalAssetsAfterOld = vaultStrategy.totalAssets();
-        console.log("Total Assets after old harvest:", totalAssetsAfterOld);
-        uint256 totalSupplyAfterOld = vaultStrategy.totalSupply();
-        console.log("Total Supply after old harvest:", totalSupplyAfterOld);
-        uint256 strategistFeeOld = vaultStrategy.accumulatedStrategistFee();
-        console.log("Strategist fee after old harvest:", strategistFeeOld);
-        vm.clearMockedCalls();
-
-        console.log("\n=== Full withdrawal to reset state ===");
-
-        // Full withdrawal to reset state
-        vm.startPrank(user);
-        uint256 userShares = vaultStrategy.balanceOf(user);
-        vaultStrategy.withdraw(vaultStrategy.convertToAssets(userShares), user, user);
-        vm.stopPrank();
-
-        console.log("\n=== Re-deposit for new harvest test ===");
-
-        // Re-deposit for new harvest test
-        vm.startPrank(user);
-        usdc.approve(address(vaultStrategy), depositAmount);
-        vaultStrategy.deposit(depositAmount, user);
-        vm.stopPrank();
-
-        uint256 reinvestmentAmount = usdcRewards + ((aeroRewards * prices[2] * 1e6) / (prices[1] * 1e18)); // Convert AERO to USDC
-        uint256 expectedNewAUSDCBalance = newAUSDCBalance + reinvestmentAmount;
-
-        // Setup same mocks for new harvest function
-        vm.mockCall(
-            vaultStrategy.aUSDC(),
-            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
-            abi.encode(newAUSDCBalance)
-        );
-        vm.mockCall(
-            vaultStrategy.variableDebtCbETH(),
-            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
-            abi.encode(newDebtBalance)
-        );
-        vm.mockCall(
-            address(vaultStrategy.aerodromePool()),
-            abi.encodeWithSelector(IPool.claimFees.selector),
-            abi.encode(usdcRewards, aeroRewards)
-        );
-        deal(address(vaultStrategy.AERO()), address(vaultStrategy), aeroRewards);
-        deal(address(usdc), address(vaultStrategy), usdcRewards);
-
-        // Record state before new harvest
-        uint256 totalAssetsBeforeNew = vaultStrategy.totalAssets();
-        console.log("Total Assets before new harvest:", totalAssetsBeforeNew);
-        uint256 totalSupplyBeforeNew = vaultStrategy.totalSupply();
-        console.log("Total Supply before new harvest:", totalSupplyBeforeNew);
-
-        // Run new harvest function
-        vm.prank(owner);
-        vaultStrategy.newHarvestReinvestAndReport();
-
-        // Record results from new harvest
-        uint256 totalAssetsAfterNew = vaultStrategy.totalAssets();
-        uint256 totalSupplyAfterNew = vaultStrategy.totalSupply();
-        uint256 strategistFeeNew = vaultStrategy.accumulatedStrategistFee();
-
-        // Compare results
-        console.log("\n=== Comparing Harvest Results ===");
-        console.log("Old Harvest - Total Assets Change:", totalAssetsAfterOld - totalAssetsBeforeOld);
-        console.log("New Harvest - Total Assets Change:", totalAssetsAfterNew - totalAssetsBeforeNew);
-        console.log("Old Harvest - Strategist Fee:", strategistFeeOld);
-        console.log("New Harvest - Strategist Fee:", strategistFeeNew);
-        console.log("Old Harvest - Total Supply:", totalSupplyAfterOld);
-        console.log("New Harvest - Total Supply:", totalSupplyAfterNew);
-
-        // Assert results are similar (within 1% tolerance)
-        assertApproxEqRel(totalAssetsAfterNew, totalAssetsAfterOld, 0.01e18, "Total assets should be similar");
-        assertApproxEqRel(strategistFeeNew, strategistFeeOld, 0.01e18, "Strategist fees should be similar");
-        assertEq(totalSupplyAfterNew, totalSupplyAfterOld, "Total supply should be identical");
     }
 }

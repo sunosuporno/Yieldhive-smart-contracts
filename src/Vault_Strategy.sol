@@ -56,8 +56,6 @@ contract VaultStrategy is
     // Add new state variables to keep track of the previous balances
     uint256 public previousAUSDCBalance;
     uint256 public previousVariableDebtBalance;
-    int256 public netDepositedUSDC;
-    int256 public netBorrowedCbETH;
     uint256 public lastHarvestAUSDCBalance;
     uint256 public lastHarvestDebtBalance;
 
@@ -69,7 +67,6 @@ contract VaultStrategy is
 
     // Add strategist address and fee percentage
     address public strategist;
-    uint256 public accumulatedStrategistFee;
     uint256 public constant STRATEGIST_FEE_PERCENTAGE = 2000; // 20% with 2 decimal places
 
     // Add this state variable
@@ -154,7 +151,7 @@ contract VaultStrategy is
         emit Deposit(caller, receiver, assets, shares);
     }
 
-    function _withdrawFunds(uint256 amount, bool isStrategistFee) internal returns (uint256 withdrawnAmount) {
+    function _withdrawFunds(uint256 amount) internal returns (uint256 withdrawnAmount) {
         console.log("withdrawing funds");
         uint256 maxWithdrawable = getMaxWithdrawableAmount();
         console.log("maxWithdrawable", maxWithdrawable);
@@ -165,10 +162,6 @@ contract VaultStrategy is
 
             console.log("withdrawing from Aave");
             aavePool.withdraw(asset(), amount, address(this));
-            if (!isStrategistFee) {
-                netDepositedUSDC -= int256(amount);
-            }
-            console.log("netDepositedUSDC", netDepositedUSDC);
             // Calculate actual withdrawn amount
             withdrawnAmount = IERC20(asset()).balanceOf(address(this)) - balanceBefore;
 
@@ -180,7 +173,7 @@ contract VaultStrategy is
             console.log("currentHealthFactor4Dec", currentHealthFactor4Dec);
             if (currentHealthFactor4Dec < bufferedTargetHealthFactor) {
                 console.log("rebalancing position");
-                _rebalancePosition(0, isStrategistFee);
+                _rebalancePosition(0);
             }
         } else {
             console.log("withdrawing more than maxWithdrawable");
@@ -188,10 +181,6 @@ contract VaultStrategy is
             uint256 balanceBefore = IERC20(asset()).balanceOf(address(this));
 
             aavePool.withdraw(asset(), (maxWithdrawable - 10), address(this));
-            if (!isStrategistFee) {
-                netDepositedUSDC -= int256(maxWithdrawable - 10);
-            }
-            console.log("netDepositedUSDC", netDepositedUSDC);
             // Calculate actual withdrawn amount
             withdrawnAmount = IERC20(asset()).balanceOf(address(this)) - balanceBefore;
 
@@ -199,7 +188,7 @@ contract VaultStrategy is
             console.log("withdrew from Aave");
             uint256 additionalAmountNeeded = amount - withdrawnAmount;
             console.log("additionalAmountNeeded", additionalAmountNeeded);
-            _rebalancePosition(additionalAmountNeeded, isStrategistFee);
+            _rebalancePosition(additionalAmountNeeded);
             console.log("rebalanced position");
 
             // After rebalancing, try to withdraw any remaining amount
@@ -212,10 +201,6 @@ contract VaultStrategy is
 
                 aavePool.withdraw(asset(), (remainingWithdrawal - 10), address(this));
                 console.log("withdraw done");
-                if (!isStrategistFee) {
-                    netDepositedUSDC -= int256(amount);
-                }
-                console.log("netDepositedUSDC", netDepositedUSDC);
                 // Add actual withdrawn amount to previous withdrawnAmount
                 withdrawnAmount += remainingWithdrawal - 10;
                 console.log("withdrawnAmount", withdrawnAmount);
@@ -239,8 +224,6 @@ contract VaultStrategy is
         // approve and supply the asset USDC to the Aave pool
         IERC20(assetAddress).approve(address(aavePool), amount);
         aavePool.supply(assetAddress, amount, address(this), 0);
-        netDepositedUSDC += int256(amount);
-        console.log("netDepositedUSDC", netDepositedUSDC);
         console.log("invested in Aave");
 
         // Convert the amount of USDC supplied to 18 decimals
@@ -257,8 +240,6 @@ contract VaultStrategy is
         // Borrowing cbETH after calculating a safe amount
         uint256 safeAmount = (cbEthAbleToBorrow * 95) / 100;
         aavePool.borrow(cbETH, safeAmount, 2, 0, address(this));
-        netBorrowedCbETH += int256(safeAmount);
-        console.log("netBorrowedCbETH", netBorrowedCbETH);
         console.log("borrowed cbETH");
         //calculate aToken And debtToken balances
         previousAUSDCBalance = IERC20(aUSDC).balanceOf(address(this));
@@ -274,7 +255,7 @@ contract VaultStrategy is
         aerodromePool.skim(address(this));
     }
 
-    function _rebalancePosition(uint256 additionalAmountNeeded, bool isStrategistFee) internal {
+    function _rebalancePosition(uint256 additionalAmountNeeded) internal {
         // Only proceed with rebalancing if we actually need additional funds
         if (additionalAmountNeeded == 0) {
             console.log("No rebalancing needed - sufficient funds in Aave");
@@ -343,10 +324,6 @@ contract VaultStrategy is
                 // Repay cbETH debt
                 IERC20(cbETH).approve(address(aavePool), cbEthReceived);
                 aavePool.repay(cbETH, cbEthReceived, 2, address(this));
-                if (!isStrategistFee) {
-                    netBorrowedCbETH -= int256(cbEthReceived);
-                }
-
                 // Emit the rebalancing event
                 emit PositionRebalanced(
                     additionalAmountNeeded, amountToFreeUp, lpTokensToBurn, usdc, aero, cbEthReceived
@@ -369,7 +346,7 @@ contract VaultStrategy is
                 (totalDebtBase * bufferedTargetHealthFactor) - (totalCollateralBase * currentLiquidationThreshold)
             ) / (bufferedTargetHealthFactor * 100);
 
-            _rebalancePosition(healthFactorAdjustment, false);
+            _rebalancePosition(healthFactorAdjustment);
         }
     }
 
@@ -484,7 +461,7 @@ contract VaultStrategy is
             console.log("Strategist Fee:", strategistFee);
 
             if (strategistFee > 0) {
-                uint256 withdrawnAmount = _withdrawFunds(strategistFee, true);
+                uint256 withdrawnAmount = _withdrawFunds(strategistFee);
                 IERC20(asset()).safeTransfer(strategist, withdrawnAmount);
                 newTotalAssets -= strategistFee;
                 console.log("New Total Assets after strategist fee:", newTotalAssets);
@@ -652,7 +629,7 @@ contract VaultStrategy is
 
         // Directly withdraw funds
         console.log("withdrawing", assets);
-        uint256 withdrawnAmount = _withdrawFunds(assets, false);
+        uint256 withdrawnAmount = _withdrawFunds(assets);
 
         console.log("shares burned", shares);
 
