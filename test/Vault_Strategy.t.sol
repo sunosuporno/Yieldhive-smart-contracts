@@ -1761,4 +1761,377 @@ contract Vault_StrategyTest is Test {
         assertEq(proxyV2.balanceOf(user), 0, "User should have no shares remaining");
         assertEq(proxyV2.totalSupply(), 0, "Total supply should be zero");
     }
+
+    function testCompleteVaultFlow() public {
+        // Setup additional test users
+        address alice = makeAddr("alice");
+        address bob = makeAddr("bob");
+        address charlie = makeAddr("charlie");
+        address dave = makeAddr("dave");
+        address eve = makeAddr("eve");
+
+        // Initial deposits (First wave)
+        uint256 aliceDeposit = 10_000e6; // 10,000 USDC
+        uint256 bobDeposit = 15_000e6; // 15,000 USDC
+        uint256 charlieDeposit = 8_000e6; // 8,000 USDC
+
+        deal(address(usdc), alice, aliceDeposit);
+        deal(address(usdc), bob, bobDeposit);
+        deal(address(usdc), charlie, charlieDeposit);
+
+        console.log("\n=== First Wave of Deposits ===");
+
+        // Alice deposits
+        vm.startPrank(alice);
+        usdc.approve(address(vaultStrategy), aliceDeposit);
+        vaultStrategy.deposit(aliceDeposit, alice);
+        vm.stopPrank();
+
+        uint256 totalAssetsAfterAlice = vaultStrategy.totalAssets();
+        uint256 totalSupplyAfterAlice = vaultStrategy.totalSupply();
+        console.log("Total Assets after Alice:", totalAssetsAfterAlice);
+        console.log("Total Supply after Alice:", totalSupplyAfterAlice);
+
+        // Bob deposits
+        vm.startPrank(bob);
+        usdc.approve(address(vaultStrategy), bobDeposit);
+        vaultStrategy.deposit(bobDeposit, bob);
+        vm.stopPrank();
+
+        // Charlie deposits
+        vm.startPrank(charlie);
+        usdc.approve(address(vaultStrategy), charlieDeposit);
+        vaultStrategy.deposit(charlieDeposit, charlie);
+        vm.stopPrank();
+
+        uint256 totalAssetsAfterFirstWave = vaultStrategy.totalAssets();
+        uint256 totalSupplyAfterFirstWave = vaultStrategy.totalSupply();
+        console.log("Total Assets after first wave:", totalAssetsAfterFirstWave);
+        console.log("Total Supply after first wave:", totalSupplyAfterFirstWave);
+
+        // First Harvest (after 30 days)
+        vm.warp(block.timestamp + 30 days);
+
+        // Get initial balances for harvest
+        uint256 initialAUSDCBalance = IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy));
+        uint256 initialDebtBalance = IERC20(vaultStrategy.variableDebtCbETH()).balanceOf(address(vaultStrategy));
+
+        // Mock aUSDC balance increase (15% APY)
+        uint256 increaseInSupply = (initialAUSDCBalance * 15) / (12 * 100); // Monthly rate
+        uint256 newAUSDCBalance = initialAUSDCBalance + increaseInSupply;
+        vm.mockCall(
+            vaultStrategy.aUSDC(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            abi.encode(newAUSDCBalance)
+        );
+
+        // Mock variable debt balance (2.5% APY for cbETH borrow)
+        uint256 increaseInDebt = (initialDebtBalance * 25) / (12 * 1000);
+        uint256 newDebtBalance = initialDebtBalance + increaseInDebt;
+        vm.mockCall(
+            vaultStrategy.variableDebtCbETH(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            abi.encode(newDebtBalance)
+        );
+
+        // Setup mock for claimFees
+        uint256 monthlyRewardValue = (totalAssetsAfterFirstWave * 45) / (12 * 100);
+        uint256 usdcRewards = monthlyRewardValue / 2;
+
+        // Get prices for conversion
+        address[] memory dataFeeds = new address[](3);
+        dataFeeds[0] = vaultStrategy.cbEthUsdDataFeedAddress();
+        dataFeeds[1] = vaultStrategy.usdcUsdDataFeedAddress();
+        dataFeeds[2] = vaultStrategy.aeroUsdDataFeedAddress();
+        uint256[] memory prices = vaultStrategy.getChainlinkDataFeedLatestAnswer(dataFeeds);
+
+        uint256 aeroRewards = ((monthlyRewardValue / 2) * prices[1] * 1e18) / (prices[2] * 1e6);
+
+        vm.mockCall(
+            address(vaultStrategy.aerodromePool()),
+            abi.encodeWithSelector(IPool.claimFees.selector),
+            abi.encode(usdcRewards, aeroRewards)
+        );
+
+        // Mock AERO balance and USDC rewards
+        deal(address(vaultStrategy.AERO()), address(vaultStrategy), aeroRewards);
+        deal(address(usdc), address(vaultStrategy), usdcRewards);
+
+        console.log("\n=== First Harvest ===");
+        vm.prank(owner);
+        vaultStrategy.harvestReinvestAndReport();
+
+        // Second wave of deposits
+        uint256 daveDeposit = 20_000e6; // 20,000 USDC
+        uint256 eveDeposit = 12_000e6; // 12,000 USDC
+        uint256 aliceSecondDeposit = 5_000e6; // Alice deposits more
+
+        // ... (continuing in next message due to length)
+        // Second wave of deposits
+        deal(address(usdc), dave, daveDeposit);
+        deal(address(usdc), eve, eveDeposit);
+        deal(address(usdc), alice, aliceSecondDeposit);
+
+        console.log("\n=== Second Wave of Deposits ===");
+
+        // Dave deposits
+        vm.startPrank(dave);
+        usdc.approve(address(vaultStrategy), daveDeposit);
+        vaultStrategy.deposit(daveDeposit, dave);
+        vm.stopPrank();
+
+        // Eve deposits
+        vm.startPrank(eve);
+        usdc.approve(address(vaultStrategy), eveDeposit);
+        vaultStrategy.deposit(eveDeposit, eve);
+        vm.stopPrank();
+
+        // Alice makes second deposit
+        vm.startPrank(alice);
+        usdc.approve(address(vaultStrategy), aliceSecondDeposit);
+        vaultStrategy.deposit(aliceSecondDeposit, alice);
+        vm.stopPrank();
+
+        uint256 totalAssetsAfterSecondWave = vaultStrategy.totalAssets();
+        uint256 totalSupplyAfterSecondWave = vaultStrategy.totalSupply();
+        console.log("Total Assets after second wave:", totalAssetsAfterSecondWave);
+        console.log("Total Supply after second wave:", totalSupplyAfterSecondWave);
+
+        // First wave of withdrawals
+        console.log("\n=== First Wave of Withdrawals ===");
+
+        // Charlie withdraws half
+        vm.startPrank(charlie);
+        uint256 charlieShares = vaultStrategy.balanceOf(charlie);
+        vaultStrategy.withdraw(charlieShares / 2, charlie, charlie);
+        vm.stopPrank();
+
+        // Bob withdraws everything
+        vm.startPrank(bob);
+        uint256 bobShares = vaultStrategy.balanceOf(bob);
+        vaultStrategy.redeem(bobShares, bob, bob);
+        vm.stopPrank();
+
+        // Second Harvest (after another 30 days)
+        vm.warp(block.timestamp + 30 days);
+
+        // Get balances before second harvest
+        initialAUSDCBalance = IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy));
+        initialDebtBalance = IERC20(vaultStrategy.variableDebtCbETH()).balanceOf(address(vaultStrategy));
+
+        // Mock higher aUSDC balance increase (18% APY due to more TVL)
+        increaseInSupply = (initialAUSDCBalance * 18) / (12 * 100);
+        newAUSDCBalance = initialAUSDCBalance + increaseInSupply;
+        vm.mockCall(
+            vaultStrategy.aUSDC(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            abi.encode(newAUSDCBalance)
+        );
+
+        // Mock variable debt balance (2.5% APY for cbETH borrow)
+        increaseInDebt = (initialDebtBalance * 25) / (12 * 1000);
+        newDebtBalance = initialDebtBalance + increaseInDebt;
+        vm.mockCall(
+            vaultStrategy.variableDebtCbETH(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            abi.encode(newDebtBalance)
+        );
+
+        // Setup mock for second harvest claimFees
+        monthlyRewardValue = (totalAssetsAfterSecondWave * 50) / (12 * 100); // Higher rewards (50% APY)
+        usdcRewards = monthlyRewardValue / 2;
+        aeroRewards = ((monthlyRewardValue / 2) * prices[1] * 1e18) / (prices[2] * 1e6);
+
+        vm.mockCall(
+            address(vaultStrategy.aerodromePool()),
+            abi.encodeWithSelector(IPool.claimFees.selector),
+            abi.encode(usdcRewards, aeroRewards)
+        );
+
+        // Mock AERO balance and USDC rewards for second harvest
+        deal(address(vaultStrategy.AERO()), address(vaultStrategy), aeroRewards);
+        deal(address(usdc), address(vaultStrategy), usdcRewards);
+
+        console.log("\n=== Second Harvest ===");
+        vm.prank(owner);
+        vaultStrategy.harvestReinvestAndReport();
+
+        uint256 totalAssetsAfterSecondHarvest = vaultStrategy.totalAssets();
+        uint256 totalSupplyAfterSecondHarvest = vaultStrategy.totalSupply();
+        console.log("Total Assets after second harvest:", totalAssetsAfterSecondHarvest);
+        console.log("Total Supply after second harvest:", totalSupplyAfterSecondHarvest);
+
+        // Final withdrawals
+        console.log("\n=== Final Withdrawals ===");
+
+        // Eve withdraws 75%
+        vm.startPrank(eve);
+        uint256 eveShares = vaultStrategy.balanceOf(eve);
+        vaultStrategy.withdraw((eveShares * 75) / 100, eve, eve);
+        vm.stopPrank();
+
+        // Dave withdraws everything
+        vm.startPrank(dave);
+        uint256 daveShares = vaultStrategy.balanceOf(dave);
+        vaultStrategy.redeem(daveShares, dave, dave);
+        vm.stopPrank();
+
+        // Final state checks
+        uint256 finalTotalAssets = vaultStrategy.totalAssets();
+        uint256 finalTotalSupply = vaultStrategy.totalSupply();
+        console.log("\n=== Final State ===");
+        console.log("Final Total Assets:", finalTotalAssets);
+        console.log("Final Total Supply:", finalTotalSupply);
+
+        // Verify remaining balances
+        console.log("Alice's final shares:", vaultStrategy.balanceOf(alice));
+        console.log("Charlie's final shares:", vaultStrategy.balanceOf(charlie));
+        console.log("Eve's final shares:", vaultStrategy.balanceOf(eve));
+
+        // Verify Bob and Dave have fully withdrawn
+        assertEq(vaultStrategy.balanceOf(bob), 0, "Bob should have no shares");
+        assertEq(vaultStrategy.balanceOf(dave), 0, "Dave should have no shares");
+    }
+
+    function testCompareHarvestFunctions() public {
+        // Initial setup - deposit 10,000 USDC
+        uint256 depositAmount = 10_000e6; // 10,000 USDC
+        deal(address(usdc), user, depositAmount);
+
+        vm.startPrank(user);
+        usdc.approve(address(vaultStrategy), depositAmount);
+        vaultStrategy.deposit(depositAmount, user);
+        vm.stopPrank();
+
+        // Fast forward time to accumulate rewards (30 days)
+        vm.warp(block.timestamp + 30 days);
+
+        // Setup mocks for the first harvest
+        // Mock aUSDC balance increase (15% APY)
+        uint256 initialAUSDCBalance = IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy));
+        uint256 increaseInSupply = (initialAUSDCBalance * 15) / (12 * 100);
+        uint256 newAUSDCBalance = initialAUSDCBalance + increaseInSupply;
+        vm.mockCall(
+            vaultStrategy.aUSDC(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            abi.encode(newAUSDCBalance)
+        );
+
+        // Mock variable debt balance (2.5% APY)
+        uint256 initialDebtBalance = IERC20(vaultStrategy.variableDebtCbETH()).balanceOf(address(vaultStrategy));
+        uint256 increaseInDebt = (initialDebtBalance * 25) / (12 * 1000);
+        uint256 newDebtBalance = initialDebtBalance + increaseInDebt;
+        vm.mockCall(
+            vaultStrategy.variableDebtCbETH(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            abi.encode(newDebtBalance)
+        );
+
+        // Setup Aerodrome rewards
+        uint256 monthlyRewardValue = (depositAmount * 45) / (12 * 100);
+        uint256 usdcRewards = monthlyRewardValue / 2;
+
+        // Get prices for AERO reward calculation
+        address[] memory dataFeeds = new address[](3);
+        dataFeeds[0] = vaultStrategy.cbEthUsdDataFeedAddress();
+        dataFeeds[1] = vaultStrategy.usdcUsdDataFeedAddress();
+        dataFeeds[2] = vaultStrategy.aeroUsdDataFeedAddress();
+        uint256[] memory prices = vaultStrategy.getChainlinkDataFeedLatestAnswer(dataFeeds);
+        uint256 aeroRewards = ((monthlyRewardValue / 2) * prices[1] * 1e18) / (prices[2] * 1e6);
+
+        // Setup mock for claimFees
+        vm.mockCall(
+            address(vaultStrategy.aerodromePool()),
+            abi.encodeWithSelector(IPool.claimFees.selector),
+            abi.encode(usdcRewards, aeroRewards)
+        );
+
+        // Mock balances
+        deal(address(vaultStrategy.AERO()), address(vaultStrategy), aeroRewards);
+        deal(address(usdc), address(vaultStrategy), usdcRewards);
+
+        // Record state before first harvest
+        uint256 totalAssetsBeforeOld = vaultStrategy.totalAssets();
+        uint256 totalSupplyBeforeOld = vaultStrategy.totalSupply();
+
+        // Run old harvest function
+        vm.prank(owner);
+        vaultStrategy.harvestReinvestAndReport();
+
+        // Record results from old harvest
+        uint256 totalAssetsAfterOld = vaultStrategy.totalAssets();
+        console.log("Total Assets after old harvest:", totalAssetsAfterOld);
+        uint256 totalSupplyAfterOld = vaultStrategy.totalSupply();
+        console.log("Total Supply after old harvest:", totalSupplyAfterOld);
+        uint256 strategistFeeOld = vaultStrategy.accumulatedStrategistFee();
+        console.log("Strategist fee after old harvest:", strategistFeeOld);
+        vm.clearMockedCalls();
+
+        console.log("\n=== Full withdrawal to reset state ===");
+
+        // Full withdrawal to reset state
+        vm.startPrank(user);
+        uint256 userShares = vaultStrategy.balanceOf(user);
+        vaultStrategy.withdraw(vaultStrategy.convertToAssets(userShares), user, user);
+        vm.stopPrank();
+
+        console.log("\n=== Re-deposit for new harvest test ===");
+
+        // Re-deposit for new harvest test
+        vm.startPrank(user);
+        usdc.approve(address(vaultStrategy), depositAmount);
+        vaultStrategy.deposit(depositAmount, user);
+        vm.stopPrank();
+
+        uint256 reinvestmentAmount = usdcRewards + ((aeroRewards * prices[2] * 1e6) / (prices[1] * 1e18)); // Convert AERO to USDC
+        uint256 expectedNewAUSDCBalance = newAUSDCBalance + reinvestmentAmount;
+
+        // Setup same mocks for new harvest function
+        vm.mockCall(
+            vaultStrategy.aUSDC(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            abi.encode(newAUSDCBalance)
+        );
+        vm.mockCall(
+            vaultStrategy.variableDebtCbETH(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            abi.encode(newDebtBalance)
+        );
+        vm.mockCall(
+            address(vaultStrategy.aerodromePool()),
+            abi.encodeWithSelector(IPool.claimFees.selector),
+            abi.encode(usdcRewards, aeroRewards)
+        );
+        deal(address(vaultStrategy.AERO()), address(vaultStrategy), aeroRewards);
+        deal(address(usdc), address(vaultStrategy), usdcRewards);
+
+        // Record state before new harvest
+        uint256 totalAssetsBeforeNew = vaultStrategy.totalAssets();
+        console.log("Total Assets before new harvest:", totalAssetsBeforeNew);
+        uint256 totalSupplyBeforeNew = vaultStrategy.totalSupply();
+        console.log("Total Supply before new harvest:", totalSupplyBeforeNew);
+
+        // Run new harvest function
+        vm.prank(owner);
+        vaultStrategy.newHarvestReinvestAndReport();
+
+        // Record results from new harvest
+        uint256 totalAssetsAfterNew = vaultStrategy.totalAssets();
+        uint256 totalSupplyAfterNew = vaultStrategy.totalSupply();
+        uint256 strategistFeeNew = vaultStrategy.accumulatedStrategistFee();
+
+        // Compare results
+        console.log("\n=== Comparing Harvest Results ===");
+        console.log("Old Harvest - Total Assets Change:", totalAssetsAfterOld - totalAssetsBeforeOld);
+        console.log("New Harvest - Total Assets Change:", totalAssetsAfterNew - totalAssetsBeforeNew);
+        console.log("Old Harvest - Strategist Fee:", strategistFeeOld);
+        console.log("New Harvest - Strategist Fee:", strategistFeeNew);
+        console.log("Old Harvest - Total Supply:", totalSupplyAfterOld);
+        console.log("New Harvest - Total Supply:", totalSupplyAfterNew);
+
+        // Assert results are similar (within 1% tolerance)
+        assertApproxEqRel(totalAssetsAfterNew, totalAssetsAfterOld, 0.01e18, "Total assets should be similar");
+        assertApproxEqRel(strategistFeeNew, strategistFeeOld, 0.01e18, "Strategist fees should be similar");
+        assertEq(totalSupplyAfterNew, totalSupplyAfterOld, "Total supply should be identical");
+    }
 }
