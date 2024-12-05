@@ -23,7 +23,7 @@ import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/shared/interf
 import {console} from "forge-std/Test.sol";
 import {Uniswap} from "./Integrations/Uniswap.sol";
 
-contract VaultStrategy is
+contract PrimeUSDC is
     Initializable,
     ERC4626Upgradeable,
     Ownable2StepUpgradeable,
@@ -60,17 +60,14 @@ contract VaultStrategy is
     uint256 public lastHarvestDebtBalance;
 
     // Define the target health factor with 4 decimal places
-    uint256 public constant TARGET_HEALTH_FACTOR = 10300; // 1.03 with 4 decimal places
-    uint256 public constant HEALTH_FACTOR_BUFFER = 300; // 0.03 with 4 decimal places
+    uint256 public TARGET_HEALTH_FACTOR; // 1.03 with 4 decimal places
+    uint256 public HEALTH_FACTOR_BUFFER; // 0.03 with 4 decimal places
 
     bytes32 public constant REBALANCER_ROLE = keccak256("REBALANCER_ROLE");
 
     // Add strategist address and fee percentage
     address public strategist;
-    uint256 public constant STRATEGIST_FEE_PERCENTAGE = 2000; // 20% with 2 decimal places
-
-    // Add this state variable
-    uint256 public accumulatedDeposits;
+    uint256 public STRATEGIST_FEE_PERCENTAGE; // 20% with 2 decimal places
 
     event StrategistFeeClaimed(uint256 claimedAmount, uint256 remainingFees);
 
@@ -111,7 +108,10 @@ contract VaultStrategy is
         address aaveProtocolDataProviderContract,
         address aaveOracleContract,
         address _strategist,
-        address aerodromePoolContract
+        address aerodromePoolContract,
+        uint256 _targetHealthFactor,
+        uint256 _healthFactorBuffer,
+        uint256 _strategistFeePercentage
     ) public initializer {
         __ERC4626_init(asset_);
         __ERC20_init(name_, symbol_);
@@ -129,6 +129,9 @@ contract VaultStrategy is
         aaveOracle = IAaveOracle(aaveOracleContract);
         strategist = _strategist;
         aerodromePool = IPoolAerodrome(aerodromePoolContract);
+        TARGET_HEALTH_FACTOR = _targetHealthFactor;
+        HEALTH_FACTOR_BUFFER = _healthFactorBuffer;
+        STRATEGIST_FEE_PERCENTAGE = _strategistFeePercentage;
     }
 
     function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
@@ -144,7 +147,6 @@ contract VaultStrategy is
 
         // Add accounting for _totalAccountedAssets
         _totalAccountedAssets += assets;
-        console.log("Accumulated deposits", accumulatedDeposits);
         console.log("Assets", assets);
         _investFunds(assets, assetAddress);
 
@@ -601,6 +603,18 @@ contract VaultStrategy is
 
     function unpause() external onlyOwner {
         _unpause();
+    }
+
+    function setTargetHealthFactor(uint256 _targetHealthFactor) external onlyOwner {
+        TARGET_HEALTH_FACTOR = _targetHealthFactor;
+    }
+
+    function setHealthFactorBuffer(uint256 _healthFactorBuffer) external onlyOwner {
+        HEALTH_FACTOR_BUFFER = _healthFactorBuffer;
+    }
+
+    function setStrategistFeePercentage(uint256 _strategistFeePercentage) external onlyOwner {
+        STRATEGIST_FEE_PERCENTAGE = _strategistFeePercentage;
     }
 
     /**

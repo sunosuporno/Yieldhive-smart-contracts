@@ -2,7 +2,7 @@
 pragma solidity ^0.8.26;
 
 import {Test, console} from "forge-std/Test.sol";
-import {VaultStrategy} from "../src/Vault_Strategy.sol";
+import {PrimeUSDC} from "../src/Vault_Strategy.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import {ProxyAdmin} from "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol";
@@ -12,15 +12,15 @@ import {ERC4626Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC2
 import {IERC20Errors} from "@openzeppelin/contracts/interfaces/draft-IERC6093.sol";
 import {IPool} from "../src/interfaces/IPoolAerodrome.sol";
 import {IPool as IPoolAave} from "../src/interfaces/IPool.sol";
-import {VaultStrategyV2} from "./Mocks/Vault_StrategyV2.sol";
+import {PrimeUSDCV2} from "./Mocks/Vault_StrategyV2.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import {ITransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import {UnsafeUpgrades} from "openzeppelin-foundry-upgrades/src/Upgrades.sol";
 import {IUpgradeableProxy} from "openzeppelin-foundry-upgrades/src/internal/interfaces/IUpgradeableProxy.sol";
 
-contract Vault_StrategyTest is Test {
-    VaultStrategy public vaultStrategy;
-    VaultStrategyV2 public vaultStrategyV2;
+contract PrimeUSDCTest is Test {
+    PrimeUSDC public primeUSDC;
+    PrimeUSDCV2 public primeUSDCV2;
     ProxyAdmin public proxyAdmin;
     // TransparentUpgradeableProxy public proxy;
     IERC20 public usdc;
@@ -37,6 +37,9 @@ contract Vault_StrategyTest is Test {
     address constant AERODROME_POOL_CONTRACT = 0x6cDcb1C4A4D1C3C6d054b27AC5B77e89eAFb971d;
     address constant AAVE_ORACLE_CONTRACT = 0x2Cc0Fc26eD4563A5ce5e8bdcfe1A2878676Ae156;
     address constant WETH9 = 0x4200000000000000000000000000000000000006;
+    uint256 constant TARGET_HEALTH_FACTOR = 10300;
+    uint256 constant HEALTH_FACTOR_BUFFER = 300;
+    uint256 constant STRATEGIST_FEE_PERCENTAGE = 2000;
     address proxy;
 
     function setUp() public {
@@ -47,12 +50,12 @@ contract Vault_StrategyTest is Test {
         console.log("Owner address:", owner);
         user = makeAddr("user");
 
-        // Deploy VaultStrategy implementation
-        VaultStrategy vaultStrategyImplementation = new VaultStrategy();
+        // Deploy primeUSDC implementation
+        PrimeUSDC primeUSDCImplementation = new PrimeUSDC();
 
         // Prepare initialization data
         bytes memory initData = abi.encodeCall(
-            VaultStrategy.initialize,
+            PrimeUSDC.initialize,
             (
                 IERC20(ASSET),
                 INITIAL_DEPOSIT,
@@ -63,71 +66,72 @@ contract Vault_StrategyTest is Test {
                 AAVE_PROTOCOL_DATA_PROVIDER_CONTRACT,
                 AAVE_ORACLE_CONTRACT,
                 owner, // strategist
-                AERODROME_POOL_CONTRACT
+                AERODROME_POOL_CONTRACT,
+                TARGET_HEALTH_FACTOR,
+                HEALTH_FACTOR_BUFFER,
+                STRATEGIST_FEE_PERCENTAGE
             )
         );
 
         // Deploy proxy using UnsafeUpgrades
-        proxy = UnsafeUpgrades.deployUUPSProxy(address(vaultStrategyImplementation), initData);
+        proxy = UnsafeUpgrades.deployUUPSProxy(address(primeUSDCImplementation), initData);
 
-        vaultStrategy = VaultStrategy(proxy);
+        primeUSDC = PrimeUSDC(proxy);
 
         // Verify ownership
-        assertEq(vaultStrategy.owner(), owner, "Owner should be set correctly");
+        assertEq(primeUSDC.owner(), owner, "Owner should be set correctly");
 
         // Set up USDC for the user
         usdc = IERC20(ASSET);
         deal(address(usdc), user, 10000 * 10 ** 6); // 1000 USDC (6 decimals)
 
-        // Approve VaultStrategy to spend user's USDC
+        // Approve primeUSDC to spend user's USDC
         vm.prank(user);
-        usdc.approve(address(vaultStrategy), type(uint256).max);
+        usdc.approve(address(primeUSDC), type(uint256).max);
     }
 
     // Add your test functions here
     function testInitialSetup() public {
-        assertEq(vaultStrategy.name(), NAME);
-        assertEq(vaultStrategy.symbol(), SYMBOL);
-        assertEq(address(vaultStrategy.asset()), ASSET);
-        assertEq(vaultStrategy.owner(), owner);
+        assertEq(primeUSDC.name(), NAME);
+        assertEq(primeUSDC.symbol(), SYMBOL);
+        assertEq(address(primeUSDC.asset()), ASSET);
+        assertEq(primeUSDC.owner(), owner);
         assertEq(usdc.balanceOf(user), 10000 * 10 ** 6);
-        assertEq(usdc.allowance(user, address(vaultStrategy)), type(uint256).max);
-        assertEq(address(vaultStrategy.aerodromePool()), AERODROME_POOL_CONTRACT);
+        assertEq(usdc.allowance(user, address(primeUSDC)), type(uint256).max);
+        assertEq(address(primeUSDC.aerodromePool()), AERODROME_POOL_CONTRACT);
     }
 
     // Add more test functions as needed
     function testDepositOnly() public {
         // Record initial states
         uint256 initialUserBalance = usdc.balanceOf(user);
-        uint256 initialVaultBalance = usdc.balanceOf(address(vaultStrategy));
-        uint256 initialTotalSupply = vaultStrategy.totalSupply();
-        uint256 initialTotalAssets = vaultStrategy.totalAssets();
+        uint256 initialVaultBalance = usdc.balanceOf(address(primeUSDC));
+        uint256 initialTotalSupply = primeUSDC.totalSupply();
+        uint256 initialTotalAssets = primeUSDC.totalAssets();
 
         // Perform deposit
         vm.startPrank(user);
-        vaultStrategy.deposit(100_000_000, user);
+        primeUSDC.deposit(100_000_000, user);
         vm.stopPrank();
 
         // Check user-side effects
-        assertEq(vaultStrategy.balanceOf(user), 100_000_000, "Incorrect shares for user");
+        assertEq(primeUSDC.balanceOf(user), 100_000_000, "Incorrect shares for user");
         assertEq(usdc.balanceOf(user), initialUserBalance - 100_000_000, "Incorrect USDC balance after deposit");
 
         // Check vault-side effects
-        assertEq(vaultStrategy.totalSupply(), initialTotalSupply + 100_000_000, "Total supply not increased correctly");
-        assertEq(vaultStrategy.totalAssets(), initialTotalAssets + 100_000_000, "Total assets not increased correctly");
+        assertEq(primeUSDC.totalSupply(), initialTotalSupply + 100_000_000, "Total supply not increased correctly");
+        assertEq(primeUSDC.totalAssets(), initialTotalAssets + 100_000_000, "Total assets not increased correctly");
 
         // Check if funds were properly invested
-        assertTrue(IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy)) > 0, "No aUSDC tokens received");
+        assertTrue(IERC20(primeUSDC.aUSDC()).balanceOf(address(primeUSDC)) > 0, "No aUSDC tokens received");
         assertTrue(
-            IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy)) > 0,
+            IERC20(address(primeUSDC.aerodromePool())).balanceOf(address(primeUSDC)) > 0,
             "No Aerodrome LP tokens received"
         );
 
         // Verify exchange rate consistency
         assertEq(
-            vaultStrategy.convertToAssets(vaultStrategy.balanceOf(user)),
-            100_000_000,
-            "Share to asset conversion mismatch"
+            primeUSDC.convertToAssets(primeUSDC.balanceOf(user)), 100_000_000, "Share to asset conversion mismatch"
         );
     }
 
@@ -144,52 +148,52 @@ contract Vault_StrategyTest is Test {
         uint256 initialUser2Balance = usdc.balanceOf(user2);
         uint256 initialUser3Balance = usdc.balanceOf(user3);
 
-        // Approve VaultStrategy for user2 and user3
+        // Approve primeUSDC for user2 and user3
         vm.prank(user2);
-        usdc.approve(address(vaultStrategy), type(uint256).max);
+        usdc.approve(address(primeUSDC), type(uint256).max);
         vm.prank(user3);
-        usdc.approve(address(vaultStrategy), type(uint256).max);
+        usdc.approve(address(primeUSDC), type(uint256).max);
 
         // User deposits
         vm.prank(user);
-        vaultStrategy.deposit(50_000_000, user);
+        primeUSDC.deposit(50_000_000, user);
 
         // Check first deposit
-        assertEq(vaultStrategy.balanceOf(user), 50_000_000, "Incorrect shares for user1");
+        assertEq(primeUSDC.balanceOf(user), 50_000_000, "Incorrect shares for user1");
         assertEq(usdc.balanceOf(user), initialUser1Balance - 50_000_000, "Incorrect USDC balance after user1 deposit");
-        assertEq(vaultStrategy.totalAssets(), 50_000_000, "Incorrect total assets after first deposit");
+        assertEq(primeUSDC.totalAssets(), 50_000_000, "Incorrect total assets after first deposit");
 
         // User2 deposits
         vm.prank(user2);
-        vaultStrategy.deposit(75_000_000, user2);
+        primeUSDC.deposit(75_000_000, user2);
 
         // Check second deposit
-        assertEq(vaultStrategy.balanceOf(user2), 75_000_000, "Incorrect shares for user2");
+        assertEq(primeUSDC.balanceOf(user2), 75_000_000, "Incorrect shares for user2");
         assertEq(usdc.balanceOf(user2), initialUser2Balance - 75_000_000, "Incorrect USDC balance after user2 deposit");
-        assertEq(vaultStrategy.totalAssets(), 125_000_000, "Incorrect total assets after second deposit");
+        assertEq(primeUSDC.totalAssets(), 125_000_000, "Incorrect total assets after second deposit");
 
         // User3 deposits
         vm.prank(user3);
-        vaultStrategy.deposit(100_000_000, user3);
+        primeUSDC.deposit(100_000_000, user3);
 
         // Check third deposit
-        assertEq(vaultStrategy.balanceOf(user3), 100_000_000, "Incorrect shares for user3");
+        assertEq(primeUSDC.balanceOf(user3), 100_000_000, "Incorrect shares for user3");
         assertEq(usdc.balanceOf(user3), initialUser3Balance - 100_000_000, "Incorrect USDC balance after user3 deposit");
-        assertEq(vaultStrategy.totalAssets(), 225_000_000, "Incorrect total assets after third deposit");
+        assertEq(primeUSDC.totalAssets(), 225_000_000, "Incorrect total assets after third deposit");
 
         // Check if funds were properly invested in Aave
-        assertEq(IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy)) > 0, true, "No aUSDC tokens received");
+        assertEq(IERC20(primeUSDC.aUSDC()).balanceOf(address(primeUSDC)) > 0, true, "No aUSDC tokens received");
 
         // Check if Aerodrome LP tokens were received
         assertEq(
-            IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy)) > 0,
+            IERC20(address(primeUSDC.aerodromePool())).balanceOf(address(primeUSDC)) > 0,
             true,
             "No Aerodrome LP tokens received"
         );
 
         // After deposits complete
-        uint256 aUsdcBalance = IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy));
-        uint256 lpBalance = IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy));
+        uint256 aUsdcBalance = IERC20(primeUSDC.aUSDC()).balanceOf(address(primeUSDC));
+        uint256 lpBalance = IERC20(address(primeUSDC.aerodromePool())).balanceOf(address(primeUSDC));
 
         assertTrue(aUsdcBalance > 0, "No aUSDC balance");
         assertTrue(lpBalance > 0, "No LP tokens");
@@ -200,54 +204,52 @@ contract Vault_StrategyTest is Test {
 
         // Setup: Record initial states
         uint256 initialUserBalance = usdc.balanceOf(user);
-        uint256 initialVaultBalance = usdc.balanceOf(address(vaultStrategy));
-        uint256 initialTotalSupply = vaultStrategy.totalSupply();
+        uint256 initialVaultBalance = usdc.balanceOf(address(primeUSDC));
+        uint256 initialTotalSupply = primeUSDC.totalSupply();
 
         // Verify initial pause state
-        assertFalse(vaultStrategy.paused(), "Vault should not be paused initially");
+        assertFalse(primeUSDC.paused(), "Vault should not be paused initially");
 
         // Test pause permissions
         vm.prank(user);
         vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user));
-        vaultStrategy.pause();
+        primeUSDC.pause();
 
         // Pause the contract as owner
         vm.prank(owner);
-        vaultStrategy.pause();
-        assertTrue(vaultStrategy.paused(), "Vault should be paused");
+        primeUSDC.pause();
+        assertTrue(primeUSDC.paused(), "Vault should be paused");
 
         // Attempt deposit while paused
         vm.prank(user);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        vaultStrategy.deposit(depositAmount, user);
+        primeUSDC.deposit(depositAmount, user);
 
         // Verify no state changes occurred during failed deposit
-        assertEq(vaultStrategy.balanceOf(user), 0, "User should have no shares");
+        assertEq(primeUSDC.balanceOf(user), 0, "User should have no shares");
         assertEq(usdc.balanceOf(user), initialUserBalance, "User balance should be unchanged");
-        assertEq(vaultStrategy.totalSupply(), initialTotalSupply, "Total supply should be unchanged");
-        assertEq(usdc.balanceOf(address(vaultStrategy)), initialVaultBalance, "Vault balance should be unchanged");
+        assertEq(primeUSDC.totalSupply(), initialTotalSupply, "Total supply should be unchanged");
+        assertEq(usdc.balanceOf(address(primeUSDC)), initialVaultBalance, "Vault balance should be unchanged");
 
         // Test unpause permissions
         vm.prank(user);
         vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user));
-        vaultStrategy.unpause();
+        primeUSDC.unpause();
 
         // Unpause the contract as owner
         vm.prank(owner);
-        vaultStrategy.unpause();
-        assertFalse(vaultStrategy.paused(), "Vault should be unpaused");
+        primeUSDC.unpause();
+        assertFalse(primeUSDC.paused(), "Vault should be unpaused");
 
         // Verify deposit works after unpausing
         vm.prank(user);
-        vaultStrategy.deposit(depositAmount, user);
+        primeUSDC.deposit(depositAmount, user);
 
         // Verify final state after successful deposit
-        assertEq(vaultStrategy.balanceOf(user), depositAmount, "Incorrect shares for user");
+        assertEq(primeUSDC.balanceOf(user), depositAmount, "Incorrect shares for user");
         assertEq(usdc.balanceOf(user), initialUserBalance - depositAmount, "Incorrect user balance after deposit");
-        assertEq(
-            vaultStrategy.totalSupply(), initialTotalSupply + depositAmount, "Incorrect total supply after deposit"
-        );
-        assertTrue(IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy)) > 0, "No aUSDC tokens received");
+        assertEq(primeUSDC.totalSupply(), initialTotalSupply + depositAmount, "Incorrect total supply after deposit");
+        assertTrue(IERC20(primeUSDC.aUSDC()).balanceOf(address(primeUSDC)) > 0, "No aUSDC tokens received");
     }
 
     // function testInvestAccumulatedFunds() public {
@@ -257,37 +259,37 @@ contract Vault_StrategyTest is Test {
     //     deal(address(usdc), user2, 1000 * 10 ** 6);
 
     //     vm.startPrank(user);
-    //     usdc.approve(address(vaultStrategy), type(uint256).max);
-    //     vaultStrategy.deposit(500 * 10 ** 6, user);
+    //     usdc.approve(address(primeUSDC), type(uint256).max);
+    //     primeUSDC.deposit(500 * 10 ** 6, user);
     //     vm.stopPrank();
 
     //     vm.startPrank(user2);
-    //     usdc.approve(address(vaultStrategy), type(uint256).max);
-    //     vaultStrategy.deposit(300 * 10 ** 6, user2);
+    //     usdc.approve(address(primeUSDC), type(uint256).max);
+    //     primeUSDC.deposit(300 * 10 ** 6, user2);
     //     vm.stopPrank();
 
     //     // Verify accumulated deposits
-    //     assertEq(vaultStrategy.accumulatedDeposits(), 800 * 10 ** 6);
+    //     assertEq(primeUSDC.accumulatedDeposits(), 800 * 10 ** 6);
 
     //     // Get initial balances
-    //     uint256 initialVaultBalance = usdc.balanceOf(address(vaultStrategy));
-    //     uint256 initialAUSDCBalance = IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy));
+    //     uint256 initialVaultBalance = usdc.balanceOf(address(primeUSDC));
+    //     uint256 initialAUSDCBalance = IERC20(primeUSDC.aUSDC()).balanceOf(address(primeUSDC));
 
     //     // Invest accumulated funds
     //     vm.prank(owner);
-    //     vaultStrategy.investAccumulatedFunds();
+    //     primeUSDC.investAccumulatedFunds();
 
     //     // Verify accumulated deposits are reset
-    //     assertEq(vaultStrategy.accumulatedDeposits(), 0);
+    //     assertEq(primeUSDC.accumulatedDeposits(), 0);
 
     //     // Verify USDC balance of vault has decreased
-    //     assertLt(usdc.balanceOf(address(vaultStrategy)), initialVaultBalance);
+    //     assertLt(usdc.balanceOf(address(primeUSDC)), initialVaultBalance);
 
     //     // Verify aUSDC balance has increased
-    //     assertGt(IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy)), initialAUSDCBalance);
+    //     assertGt(IERC20(primeUSDC.aUSDC()).balanceOf(address(primeUSDC)), initialAUSDCBalance);
 
     //     // Verify total assets haven't changed significantly (allowing for small differences due to rounding)
-    //     uint256 totalAssetsAfterInvest = vaultStrategy.totalAssets();
+    //     uint256 totalAssetsAfterInvest = primeUSDC.totalAssets();
     //     assertApproxEqRel(totalAssetsAfterInvest, 800 * 10 ** 6, 1e16); // 1% tolerance
     // }
 
@@ -295,28 +297,28 @@ contract Vault_StrategyTest is Test {
         // Initial deposit
         uint256 firstDepositAmount = 50_000_000; // 50 USDC
         vm.startPrank(user);
-        vaultStrategy.deposit(firstDepositAmount, user);
+        primeUSDC.deposit(firstDepositAmount, user);
 
         // Record state after first deposit
-        uint256 sharesAfterFirst = vaultStrategy.balanceOf(user);
-        uint256 assetsAfterFirst = vaultStrategy.totalAssets();
+        uint256 sharesAfterFirst = primeUSDC.balanceOf(user);
+        uint256 assetsAfterFirst = primeUSDC.totalAssets();
         assertEq(sharesAfterFirst, firstDepositAmount, "Incorrect shares after first deposit");
         assertEq(assetsAfterFirst, firstDepositAmount, "Incorrect assets after first deposit");
 
         // Second deposit
         uint256 secondDepositAmount = 30_000_000; // 30 USDC
-        vaultStrategy.deposit(secondDepositAmount, user);
+        primeUSDC.deposit(secondDepositAmount, user);
         vm.stopPrank();
 
         // Verify final state
-        uint256 finalShares = vaultStrategy.balanceOf(user);
-        uint256 finalAssets = vaultStrategy.totalAssets();
+        uint256 finalShares = primeUSDC.balanceOf(user);
+        uint256 finalAssets = primeUSDC.totalAssets();
         assertEq(finalShares, firstDepositAmount + secondDepositAmount, "Incorrect final shares");
         assertEq(finalAssets, firstDepositAmount + secondDepositAmount, "Incorrect final assets");
 
         // Verify exchange rate consistency
         assertEq(
-            vaultStrategy.convertToAssets(finalShares),
+            primeUSDC.convertToAssets(finalShares),
             firstDepositAmount + secondDepositAmount,
             "Share to asset conversion mismatch"
         );
@@ -326,27 +328,27 @@ contract Vault_StrategyTest is Test {
         // Initial mint
         uint256 firstMintShares = 50_000_000; // 50 shares
         vm.startPrank(user);
-        uint256 firstAssets = vaultStrategy.mint(firstMintShares, user);
+        uint256 firstAssets = primeUSDC.mint(firstMintShares, user);
 
         // Record state after first mint
-        uint256 sharesAfterFirst = vaultStrategy.balanceOf(user);
-        uint256 assetsAfterFirst = vaultStrategy.totalAssets();
+        uint256 sharesAfterFirst = primeUSDC.balanceOf(user);
+        uint256 assetsAfterFirst = primeUSDC.totalAssets();
         assertEq(sharesAfterFirst, firstMintShares, "Incorrect shares after first mint");
         assertEq(assetsAfterFirst, firstAssets, "Incorrect assets after first mint");
 
         // Second mint
         uint256 secondMintShares = 30_000_000; // 30 shares
-        uint256 secondAssets = vaultStrategy.mint(secondMintShares, user);
+        uint256 secondAssets = primeUSDC.mint(secondMintShares, user);
         vm.stopPrank();
 
         // Verify final state
-        uint256 finalShares = vaultStrategy.balanceOf(user);
-        uint256 finalAssets = vaultStrategy.totalAssets();
+        uint256 finalShares = primeUSDC.balanceOf(user);
+        uint256 finalAssets = primeUSDC.totalAssets();
         assertEq(finalShares, firstMintShares + secondMintShares, "Incorrect final shares");
         assertEq(finalAssets, firstAssets + secondAssets, "Incorrect final assets");
 
         // Verify exchange rate consistency
-        assertEq(vaultStrategy.convertToShares(finalAssets), finalShares, "Asset to share conversion mismatch");
+        assertEq(primeUSDC.convertToShares(finalAssets), finalShares, "Asset to share conversion mismatch");
     }
 
     function testFuzzDeposit(uint256 depositAmount) public {
@@ -359,36 +361,30 @@ contract Vault_StrategyTest is Test {
 
         // Record initial states
         uint256 initialUserBalance = usdc.balanceOf(user);
-        uint256 initialVaultShares = vaultStrategy.totalSupply();
-        uint256 initialVaultAssets = vaultStrategy.totalAssets();
+        uint256 initialVaultShares = primeUSDC.totalSupply();
+        uint256 initialVaultAssets = primeUSDC.totalAssets();
 
         // Perform deposit
         vm.startPrank(user);
-        usdc.approve(address(vaultStrategy), depositAmount);
-        vaultStrategy.deposit(depositAmount, user);
+        usdc.approve(address(primeUSDC), depositAmount);
+        primeUSDC.deposit(depositAmount, user);
         vm.stopPrank();
 
         // Verify final states
-        assertEq(vaultStrategy.balanceOf(user), depositAmount, "Incorrect shares minted");
+        assertEq(primeUSDC.balanceOf(user), depositAmount, "Incorrect shares minted");
         assertEq(usdc.balanceOf(user), initialUserBalance - depositAmount, "Incorrect USDC balance after deposit");
-        assertEq(
-            vaultStrategy.totalSupply(), initialVaultShares + depositAmount, "Incorrect total supply after deposit"
-        );
-        assertEq(
-            vaultStrategy.totalAssets(), initialVaultAssets + depositAmount, "Incorrect total assets after deposit"
-        );
+        assertEq(primeUSDC.totalSupply(), initialVaultShares + depositAmount, "Incorrect total supply after deposit");
+        assertEq(primeUSDC.totalAssets(), initialVaultAssets + depositAmount, "Incorrect total assets after deposit");
 
         // Verify exchange rate consistency
         assertEq(
-            vaultStrategy.convertToAssets(vaultStrategy.balanceOf(user)),
-            depositAmount,
-            "Share to asset conversion mismatch"
+            primeUSDC.convertToAssets(primeUSDC.balanceOf(user)), depositAmount, "Share to asset conversion mismatch"
         );
 
         // Verify investment - using greater than zero check instead of specific amounts
-        assertTrue(IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy)) > 0, "No aUSDC tokens received");
+        assertTrue(IERC20(primeUSDC.aUSDC()).balanceOf(address(primeUSDC)) > 0, "No aUSDC tokens received");
         assertTrue(
-            IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy)) > 0,
+            IERC20(address(primeUSDC.aerodromePool())).balanceOf(address(primeUSDC)) > 0,
             "No Aerodrome LP tokens received"
         );
     }
@@ -402,16 +398,16 @@ contract Vault_StrategyTest is Test {
 
         // Try to deposit wrong token
         vm.startPrank(user);
-        wrongToken.approve(address(vaultStrategy), type(uint256).max);
+        wrongToken.approve(address(primeUSDC), type(uint256).max);
 
         // This should fail because the vault only accepts USDC
         vm.expectRevert("ERC20: transfer amount exceeds balance");
-        vaultStrategy.deposit(100 * 10 ** 18, user);
+        primeUSDC.deposit(100 * 10 ** 18, user);
         vm.stopPrank();
 
         // Verify no state changes occurred
-        assertEq(vaultStrategy.balanceOf(user), 0, "User should have no shares");
-        assertEq(vaultStrategy.totalSupply(), 0, "Total supply should be unchanged");
+        assertEq(primeUSDC.balanceOf(user), 0, "User should have no shares");
+        assertEq(primeUSDC.totalSupply(), 0, "Total supply should be unchanged");
     }
 
     function testPartialWithdraw() public {
@@ -420,28 +416,27 @@ contract Vault_StrategyTest is Test {
         console.log("initialUserBalance", initialUserBalance);
         uint256 depositAmount = 100_000_000; // 100 USDC
         vm.startPrank(user);
-        vaultStrategy.deposit(depositAmount, user);
+        primeUSDC.deposit(depositAmount, user);
 
         // Record state before withdrawal
         uint256 afterDepositUserBalance = usdc.balanceOf(user);
         console.log("afterDepositUserBalance", afterDepositUserBalance);
-        uint256 afterDepositVaultShares = vaultStrategy.balanceOf(user);
-        uint256 afterDepositVaultAssets = vaultStrategy.totalAssets();
-        uint256 afterDepositTotalSupply = vaultStrategy.totalSupply();
+        uint256 afterDepositVaultShares = primeUSDC.balanceOf(user);
+        uint256 afterDepositVaultAssets = primeUSDC.totalAssets();
+        uint256 afterDepositTotalSupply = primeUSDC.totalSupply();
         console.log("afterDepositTotalSupply", afterDepositTotalSupply);
 
         // Withdraw half of the deposit
         uint256 withdrawAmount = depositAmount / 2; // 50 USDC
         console.log("withdrawAmount", withdrawAmount);
-        uint256 lpTokensBeforeWithdraw =
-            IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy));
+        uint256 lpTokensBeforeWithdraw = IERC20(address(primeUSDC.aerodromePool())).balanceOf(address(primeUSDC));
         console.log("lpTokensBeforeWithdraw", lpTokensBeforeWithdraw);
-        vaultStrategy.withdraw(withdrawAmount, user, user);
+        primeUSDC.withdraw(withdrawAmount, user, user);
         vm.stopPrank();
 
         uint256 afterWithdrawUserBalance = usdc.balanceOf(user);
-        uint256 afterWithdrawTotalSupply = vaultStrategy.totalSupply();
-        uint256 afterWithdrawTotalAssets = vaultStrategy.totalAssets();
+        uint256 afterWithdrawTotalSupply = primeUSDC.totalSupply();
+        uint256 afterWithdrawTotalAssets = primeUSDC.totalAssets();
         console.log("afterWithdrawUserBalance", afterWithdrawUserBalance);
         console.log("afterWithdrawTotalSupply", afterWithdrawTotalSupply);
         console.log("afterWithdrawTotalAssets", afterWithdrawTotalAssets);
@@ -454,12 +449,10 @@ contract Vault_StrategyTest is Test {
             "Incorrect USDC balance after withdrawal"
         );
         assertEq(
-            vaultStrategy.balanceOf(user), afterDepositVaultShares - withdrawAmount, "Incorrect shares after withdrawal"
+            primeUSDC.balanceOf(user), afterDepositVaultShares - withdrawAmount, "Incorrect shares after withdrawal"
         );
         assertEq(
-            vaultStrategy.totalAssets(),
-            afterDepositVaultAssets - withdrawAmount,
-            "Incorrect total assets after withdrawal"
+            primeUSDC.totalAssets(), afterDepositVaultAssets - withdrawAmount, "Incorrect total assets after withdrawal"
         );
         assertEq(
             afterWithdrawTotalSupply,
@@ -468,9 +461,9 @@ contract Vault_StrategyTest is Test {
         );
 
         // Verify remaining investment positions
-        assertTrue(IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy)) > 0, "No aUSDC tokens remaining");
+        assertTrue(IERC20(primeUSDC.aUSDC()).balanceOf(address(primeUSDC)) > 0, "No aUSDC tokens remaining");
         assertTrue(
-            IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy)) > 0,
+            IERC20(address(primeUSDC.aerodromePool())).balanceOf(address(primeUSDC)) > 0,
             "No Aerodrome LP tokens remaining"
         );
     }
@@ -481,25 +474,24 @@ contract Vault_StrategyTest is Test {
         console.log("initialUserBalance", initialUserBalance);
         uint256 depositAmount = 100_000_000; // 100 USDC
         vm.startPrank(user);
-        vaultStrategy.deposit(depositAmount, user);
+        primeUSDC.deposit(depositAmount, user);
 
         // Record state before withdrawal
         uint256 afterDepositUserBalance = usdc.balanceOf(user);
         console.log("afterDepositUserBalance", afterDepositUserBalance);
-        uint256 afterDepositVaultShares = vaultStrategy.balanceOf(user);
-        uint256 afterDepositVaultAssets = vaultStrategy.totalAssets();
-        uint256 afterDepositTotalSupply = vaultStrategy.totalSupply();
+        uint256 afterDepositVaultShares = primeUSDC.balanceOf(user);
+        uint256 afterDepositVaultAssets = primeUSDC.totalAssets();
+        uint256 afterDepositTotalSupply = primeUSDC.totalSupply();
         console.log("afterDepositTotalSupply", afterDepositTotalSupply);
 
         // Full withdrawal
-        uint256 lpTokensBeforeWithdraw =
-            IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy));
+        uint256 lpTokensBeforeWithdraw = IERC20(address(primeUSDC.aerodromePool())).balanceOf(address(primeUSDC));
         console.log("lpTokensBeforeWithdraw", lpTokensBeforeWithdraw);
-        vaultStrategy.withdraw(depositAmount, user, user);
+        primeUSDC.withdraw(depositAmount, user, user);
         vm.stopPrank();
 
         uint256 afterWithdrawUserBalance = usdc.balanceOf(user);
-        uint256 afterWithdrawTotalSupply = vaultStrategy.totalSupply();
+        uint256 afterWithdrawTotalSupply = primeUSDC.totalSupply();
         console.log("afterWithdrawUserBalance", afterWithdrawUserBalance);
         console.log("afterWithdrawTotalSupply", afterWithdrawTotalSupply);
 
@@ -510,19 +502,19 @@ contract Vault_StrategyTest is Test {
             0.01e18, // 1% tolerance
             "User should have approximately their original balance back"
         );
-        assertEq(vaultStrategy.balanceOf(user), 0, "User should have no shares remaining");
-        assertEq(vaultStrategy.totalAssets(), 0, "Vault should have no assets remaining");
+        assertEq(primeUSDC.balanceOf(user), 0, "User should have no shares remaining");
+        assertEq(primeUSDC.totalAssets(), 0, "Vault should have no assets remaining");
         assertEq(afterWithdrawTotalSupply, 0, "Total supply should be zero");
 
         // Verify investment positions are empty
         assertEq(
-            IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy)),
+            IERC20(address(primeUSDC.aerodromePool())).balanceOf(address(primeUSDC)),
             0,
             "Aerodrome LP tokens should be zero"
         );
 
         // Check remaining aUSDC balance
-        uint256 remainingAUSDC = IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy));
+        uint256 remainingAUSDC = IERC20(primeUSDC.aUSDC()).balanceOf(address(primeUSDC));
         console.log("Remaining aUSDC balance:", remainingAUSDC);
 
         // Instead of expecting exact zero, check if it's negligible
@@ -533,7 +525,7 @@ contract Vault_StrategyTest is Test {
         );
 
         assertEq(
-            IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy)),
+            IERC20(address(primeUSDC.aerodromePool())).balanceOf(address(primeUSDC)),
             0,
             "Aerodrome LP tokens should be zero"
         );
@@ -550,22 +542,22 @@ contract Vault_StrategyTest is Test {
             deal(address(usdc), user, amounts[i]);
 
             vm.startPrank(user);
-            usdc.approve(address(vaultStrategy), amounts[i]);
-            vaultStrategy.deposit(amounts[i], user);
+            usdc.approve(address(primeUSDC), amounts[i]);
+            primeUSDC.deposit(amounts[i], user);
             vm.stopPrank();
-            uint256 userShareBalAfterDeposit = vaultStrategy.balanceOf(user);
+            uint256 userShareBalAfterDeposit = primeUSDC.balanceOf(user);
             console.log("userShareBalAfterDeposit", userShareBalAfterDeposit);
 
-            assertEq(vaultStrategy.balanceOf(user), amounts[i], "Deposit amount mismatch");
+            assertEq(primeUSDC.balanceOf(user), amounts[i], "Deposit amount mismatch");
 
             // Reset for next iteration
             vm.prank(user);
-            vaultStrategy.withdraw(amounts[i], user, user);
-            uint256 userShareBal = vaultStrategy.balanceOf(user);
+            primeUSDC.withdraw(amounts[i], user, user);
+            uint256 userShareBal = primeUSDC.balanceOf(user);
             console.log("userShareBal", userShareBal);
-            uint256 balContract = usdc.balanceOf(address(vaultStrategy));
+            uint256 balContract = usdc.balanceOf(address(primeUSDC));
             console.log("balContract", balContract);
-            uint256 totalAssets = vaultStrategy.totalAssets();
+            uint256 totalAssets = primeUSDC.totalAssets();
             console.log("totalAssets", totalAssets);
         }
     }
@@ -575,7 +567,7 @@ contract Vault_StrategyTest is Test {
         uint256 depositAmount = 100_000_000; // 100 USDC
 
         vm.startPrank(user);
-        vaultStrategy.deposit(depositAmount, user);
+        primeUSDC.deposit(depositAmount, user);
 
         // Try to withdraw more than deposited
         uint256 withdrawAmount = depositAmount + 1e6; // 101 USDC
@@ -586,13 +578,13 @@ contract Vault_StrategyTest is Test {
                 ERC4626Upgradeable.ERC4626ExceededMaxWithdraw.selector, user, withdrawAmount, depositAmount
             )
         );
-        vaultStrategy.withdraw(withdrawAmount, user, user);
+        primeUSDC.withdraw(withdrawAmount, user, user);
 
         vm.stopPrank();
 
         // Verify state hasn't changed
-        assertEq(vaultStrategy.balanceOf(user), depositAmount, "User shares should remain unchanged");
-        assertEq(vaultStrategy.totalSupply(), depositAmount, "Total supply should remain unchanged");
+        assertEq(primeUSDC.balanceOf(user), depositAmount, "User shares should remain unchanged");
+        assertEq(primeUSDC.totalSupply(), depositAmount, "Total supply should remain unchanged");
     }
 
     function testFindLowerLimit() public {
@@ -606,10 +598,10 @@ contract Vault_StrategyTest is Test {
             deal(address(usdc), user, amount);
 
             vm.startPrank(user);
-            usdc.approve(address(vaultStrategy), amount);
-            vaultStrategy.deposit(amount, user);
+            usdc.approve(address(primeUSDC), amount);
+            primeUSDC.deposit(amount, user);
 
-            try vaultStrategy.withdraw(amount, user, user) {
+            try primeUSDC.withdraw(amount, user, user) {
                 console.log("Success at %s USDC", amount / 1e6);
             } catch Error(string memory reason) {
                 console.log("Failed at %s USDC with reason: %s", amount / 1e6, reason);
@@ -628,14 +620,14 @@ contract Vault_StrategyTest is Test {
         uint256 depositAmount = 100_000_000; // 100 USDC
 
         vm.startPrank(user);
-        vaultStrategy.deposit(depositAmount, user);
+        primeUSDC.deposit(depositAmount, user);
 
         // First withdrawal (full amount)
-        vaultStrategy.withdraw(depositAmount, user, user);
+        primeUSDC.withdraw(depositAmount, user, user);
 
         // Verify state after full withdrawal
-        assertEq(vaultStrategy.balanceOf(user), 0, "User should have no shares after full withdrawal");
-        assertEq(vaultStrategy.totalSupply(), 0, "Total supply should be zero after full withdrawal");
+        assertEq(primeUSDC.balanceOf(user), 0, "User should have no shares after full withdrawal");
+        assertEq(primeUSDC.totalSupply(), 0, "Total supply should be zero after full withdrawal");
 
         // Try to withdraw again
         vm.expectRevert(
@@ -646,13 +638,13 @@ contract Vault_StrategyTest is Test {
                 0 // But max withdrawable is 0 since user has no shares
             )
         );
-        vaultStrategy.withdraw(depositAmount, user, user);
+        primeUSDC.withdraw(depositAmount, user, user);
 
         vm.stopPrank();
 
         // Verify state hasn't changed after failed withdrawal
-        assertEq(vaultStrategy.balanceOf(user), 0, "User shares should still be zero");
-        assertEq(vaultStrategy.totalSupply(), 0, "Total supply should still be zero");
+        assertEq(primeUSDC.balanceOf(user), 0, "User shares should still be zero");
+        assertEq(primeUSDC.totalSupply(), 0, "Total supply should still be zero");
     }
 
     function testMultiplePartialWithdrawals() public {
@@ -668,12 +660,12 @@ contract Vault_StrategyTest is Test {
         console.log("initialUserBalance", initialUserBalance);
 
         vm.startPrank(user);
-        vaultStrategy.deposit(depositAmount, user);
+        primeUSDC.deposit(depositAmount, user);
 
         // Log initial LP token balance after deposit
         console.log(
             "\nInitial LP token balance after deposit:",
-            IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy))
+            IERC20(address(primeUSDC.aerodromePool())).balanceOf(address(primeUSDC))
         );
 
         // Record post-deposit state
@@ -687,23 +679,23 @@ contract Vault_StrategyTest is Test {
             // Log LP token balance before withdrawal
             console.log(
                 "LP token balance before withdrawal:",
-                IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy))
+                IERC20(address(primeUSDC.aerodromePool())).balanceOf(address(primeUSDC))
             );
 
             uint256 preWithdrawBalance = usdc.balanceOf(user);
-            uint256 preWithdrawShares = vaultStrategy.balanceOf(user);
-            uint256 preWithdrawTotalSupply = vaultStrategy.totalSupply();
-            uint256 preWithdrawTotalAssets = vaultStrategy.totalAssets();
+            uint256 preWithdrawShares = primeUSDC.balanceOf(user);
+            uint256 preWithdrawTotalSupply = primeUSDC.totalSupply();
+            uint256 preWithdrawTotalAssets = primeUSDC.totalAssets();
 
             // Perform withdrawal
-            vaultStrategy.withdraw(withdrawAmounts[i], user, user);
+            primeUSDC.withdraw(withdrawAmounts[i], user, user);
             totalWithdrawn += withdrawAmounts[i];
             remainingShares -= withdrawAmounts[i];
 
             // Log LP token balance after withdrawal
             console.log(
                 "LP token balance after withdrawal:",
-                IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy))
+                IERC20(address(primeUSDC.aerodromePool())).balanceOf(address(primeUSDC))
             );
 
             // Verify user's USDC balance increased by withdrawal amount
@@ -716,27 +708,27 @@ contract Vault_StrategyTest is Test {
 
             // Verify user's share balance decreased by withdrawal amount
             assertEq(
-                vaultStrategy.balanceOf(user),
+                primeUSDC.balanceOf(user),
                 preWithdrawShares - withdrawAmounts[i],
                 "Incorrect share balance after withdrawal"
             );
 
             // Verify total supply decreased by withdrawal amount
             assertEq(
-                vaultStrategy.totalSupply(),
+                primeUSDC.totalSupply(),
                 preWithdrawTotalSupply - withdrawAmounts[i],
                 "Incorrect total supply after withdrawal"
             );
 
             // Verify total assets decreased by withdrawal amount
             assertEq(
-                vaultStrategy.totalAssets(),
+                primeUSDC.totalAssets(),
                 preWithdrawTotalAssets - withdrawAmounts[i],
                 "Incorrect total assets after withdrawal"
             );
 
             // Verify remaining shares matches expected
-            assertEq(vaultStrategy.balanceOf(user), remainingShares, "Incorrect remaining shares");
+            assertEq(primeUSDC.balanceOf(user), remainingShares, "Incorrect remaining shares");
 
             console.log("Remaining shares: %s", remainingShares / 1e6);
             console.log("Total withdrawn so far: %s USDC", totalWithdrawn / 1e6);
@@ -748,18 +740,16 @@ contract Vault_StrategyTest is Test {
         console.log("\nFinal State Verification:");
         console.log("User USDC balance:", usdc.balanceOf(user) / 1e6, "USDC");
         console.log("Expected balance:", (initialUserBalance - depositAmount + totalWithdrawn) / 1e6, "USDC");
-        console.log(
-            "LP tokens balance:", IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy))
-        );
+        console.log("LP tokens balance:", IERC20(address(primeUSDC.aerodromePool())).balanceOf(address(primeUSDC)));
 
         assertEq(
             usdc.balanceOf(user), initialUserBalance - depositAmount + totalWithdrawn, "Final USDC balance incorrect"
         );
 
-        console.log("User shares:", vaultStrategy.balanceOf(user) / 1e6, "shares");
+        console.log("User shares:", primeUSDC.balanceOf(user) / 1e6, "shares");
         console.log("Expected shares:", (depositAmount - totalWithdrawn) / 1e6, "shares");
 
-        assertEq(vaultStrategy.balanceOf(user), depositAmount - totalWithdrawn, "Final shares balance incorrect");
+        assertEq(primeUSDC.balanceOf(user), depositAmount - totalWithdrawn, "Final shares balance incorrect");
 
         // Verify we can still withdraw remaining balance
         uint256 remainingBalance = depositAmount - totalWithdrawn;
@@ -767,20 +757,20 @@ contract Vault_StrategyTest is Test {
         console.log("Remaining balance to withdraw:", remainingBalance / 1e6, "USDC");
         console.log(
             "LP tokens before final withdrawal:",
-            IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy))
+            IERC20(address(primeUSDC.aerodromePool())).balanceOf(address(primeUSDC))
         );
 
         vm.startPrank(user);
-        vaultStrategy.withdraw(remainingBalance, user, user);
+        primeUSDC.withdraw(remainingBalance, user, user);
         vm.stopPrank();
 
         // Verify final state after complete withdrawal
         console.log("\nPost-Final Withdrawal State:");
         console.log("Final user USDC balance:", usdc.balanceOf(user) / 1e6, "USDC");
         console.log("Initial user USDC balance:", initialUserBalance / 1e6, "USDC");
-        console.log("Final shares balance:", vaultStrategy.balanceOf(user));
+        console.log("Final shares balance:", primeUSDC.balanceOf(user));
         console.log(
-            "Final LP tokens balance:", IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy))
+            "Final LP tokens balance:", IERC20(address(primeUSDC.aerodromePool())).balanceOf(address(primeUSDC))
         );
 
         assertApproxEqRel(
@@ -789,14 +779,14 @@ contract Vault_StrategyTest is Test {
             0.01e18, // 1% tolerance
             "Should have received back approximately initial balance"
         );
-        assertEq(vaultStrategy.balanceOf(user), 0, "Should have no shares remaining");
+        assertEq(primeUSDC.balanceOf(user), 0, "Should have no shares remaining");
     }
 
     function testUnauthorizedWithdraw() public {
         // Setup: User1 deposits funds
         uint256 depositAmount = 100_000_000; // 100 USDC
         vm.prank(user);
-        vaultStrategy.deposit(depositAmount, user);
+        primeUSDC.deposit(depositAmount, user);
 
         // Create a random user who has no deposits or approvals
         address randomUser = makeAddr("randomUser");
@@ -808,56 +798,56 @@ contract Vault_StrategyTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(IERC20Errors.ERC20InsufficientAllowance.selector, randomUser, 0, depositAmount)
         );
-        vaultStrategy.withdraw(depositAmount, randomUser, user);
+        primeUSDC.withdraw(depositAmount, randomUser, user);
 
         vm.stopPrank();
 
         // Verify state remains unchanged
-        assertEq(vaultStrategy.balanceOf(user), depositAmount, "User balance should remain unchanged");
-        assertEq(vaultStrategy.balanceOf(randomUser), 0, "Random user should have no shares");
+        assertEq(primeUSDC.balanceOf(user), depositAmount, "User balance should remain unchanged");
+        assertEq(primeUSDC.balanceOf(randomUser), 0, "Random user should have no shares");
     }
 
     function testWithdrawOnBehalf() public {
         // Setup: User1 deposits funds
         uint256 depositAmount = 100_000_000; // 100 USDC
         vm.prank(user);
-        vaultStrategy.deposit(depositAmount, user);
+        primeUSDC.deposit(depositAmount, user);
 
         // Create a second user who will withdraw on behalf
         address authorizedUser = makeAddr("authorizedUser");
 
         // Initial state checks
-        assertEq(vaultStrategy.balanceOf(user), depositAmount, "Initial user balance incorrect");
-        assertEq(vaultStrategy.balanceOf(authorizedUser), 0, "Authorized user should have no initial balance");
+        assertEq(primeUSDC.balanceOf(user), depositAmount, "Initial user balance incorrect");
+        assertEq(primeUSDC.balanceOf(authorizedUser), 0, "Authorized user should have no initial balance");
 
         // User approves authorizedUser to spend their shares
         vm.prank(user);
-        vaultStrategy.approve(authorizedUser, depositAmount);
+        primeUSDC.approve(authorizedUser, depositAmount);
 
         // AuthorizedUser withdraws on behalf of the original user
         vm.prank(authorizedUser);
-        vaultStrategy.withdraw(
+        primeUSDC.withdraw(
             depositAmount, // amount to withdraw
             authorizedUser, // recipient of the assets
             user // owner of the shares
         );
 
         // Verify final state
-        assertEq(vaultStrategy.balanceOf(user), 0, "User should have no remaining shares");
+        assertEq(primeUSDC.balanceOf(user), 0, "User should have no remaining shares");
         assertApproxEqRel(
             usdc.balanceOf(authorizedUser),
             depositAmount,
             0.01e18, // 1% tolerance
             "Authorized user should have received the assets"
         );
-        assertEq(vaultStrategy.allowance(user, authorizedUser), 0, "Allowance should be spent");
+        assertEq(primeUSDC.allowance(user, authorizedUser), 0, "Allowance should be spent");
     }
 
     function testWithdrawExceedingAllowance() public {
         // Setup: User1 deposits funds
         uint256 depositAmount = 1_000_000_000; // 1000 USDC
         vm.prank(user);
-        vaultStrategy.deposit(depositAmount, user);
+        primeUSDC.deposit(depositAmount, user);
 
         // Create a second user who will be partially authorized
         address authorizedUser = makeAddr("authorizedUser");
@@ -867,7 +857,7 @@ contract Vault_StrategyTest is Test {
         uint256 attemptedWithdrawal = 650_000_000; // 650 USDC
 
         vm.prank(user);
-        vaultStrategy.approve(authorizedUser, approvedAmount);
+        primeUSDC.approve(authorizedUser, approvedAmount);
 
         // AuthorizedUser attempts to withdraw more than approved
         vm.startPrank(authorizedUser);
@@ -877,7 +867,7 @@ contract Vault_StrategyTest is Test {
                 IERC20Errors.ERC20InsufficientAllowance.selector, authorizedUser, approvedAmount, attemptedWithdrawal
             )
         );
-        vaultStrategy.withdraw(
+        primeUSDC.withdraw(
             attemptedWithdrawal, // trying to withdraw more than approved
             authorizedUser, // recipient of the assets
             user // owner of the shares
@@ -886,8 +876,8 @@ contract Vault_StrategyTest is Test {
         vm.stopPrank();
 
         // Verify state remains unchanged
-        assertEq(vaultStrategy.balanceOf(user), depositAmount, "User balance should remain unchanged");
-        assertEq(vaultStrategy.allowance(user, authorizedUser), approvedAmount, "Allowance should remain unchanged");
+        assertEq(primeUSDC.balanceOf(user), depositAmount, "User balance should remain unchanged");
+        assertEq(primeUSDC.allowance(user, authorizedUser), approvedAmount, "Allowance should remain unchanged");
         assertEq(usdc.balanceOf(authorizedUser), 0, "Authorized user should not have received any assets");
     }
 
@@ -895,85 +885,83 @@ contract Vault_StrategyTest is Test {
         // Setup: Initial deposit
         uint256 depositAmount = 100 * 10 ** 6;
         vm.prank(user);
-        vaultStrategy.deposit(depositAmount, user);
+        primeUSDC.deposit(depositAmount, user);
 
         // Record initial states
         uint256 initialUserBalance = usdc.balanceOf(user);
-        uint256 initialVaultBalance = usdc.balanceOf(address(vaultStrategy));
-        uint256 initialTotalSupply = vaultStrategy.totalSupply();
-        uint256 initialUserShares = vaultStrategy.balanceOf(user);
+        uint256 initialVaultBalance = usdc.balanceOf(address(primeUSDC));
+        uint256 initialTotalSupply = primeUSDC.totalSupply();
+        uint256 initialUserShares = primeUSDC.balanceOf(user);
 
         // Verify initial pause state
-        assertFalse(vaultStrategy.paused(), "Vault should not be paused initially");
+        assertFalse(primeUSDC.paused(), "Vault should not be paused initially");
 
         // Test pause permissions
         vm.prank(user);
         vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user));
-        vaultStrategy.pause();
+        primeUSDC.pause();
 
         // Pause the contract as owner
         vm.prank(owner);
-        vaultStrategy.pause();
-        assertTrue(vaultStrategy.paused(), "Vault should be paused");
+        primeUSDC.pause();
+        assertTrue(primeUSDC.paused(), "Vault should be paused");
 
         // Attempt withdrawal while paused
         vm.prank(user);
         vm.expectRevert(PausableUpgradeable.EnforcedPause.selector);
-        vaultStrategy.withdraw(depositAmount, user, user);
+        primeUSDC.withdraw(depositAmount, user, user);
 
         // Verify no state changes occurred during failed withdrawal
-        assertEq(vaultStrategy.balanceOf(user), initialUserShares, "User shares should be unchanged");
+        assertEq(primeUSDC.balanceOf(user), initialUserShares, "User shares should be unchanged");
         assertEq(usdc.balanceOf(user), initialUserBalance, "User balance should be unchanged");
-        assertEq(vaultStrategy.totalSupply(), initialTotalSupply, "Total supply should be unchanged");
-        assertEq(usdc.balanceOf(address(vaultStrategy)), initialVaultBalance, "Vault balance should be unchanged");
+        assertEq(primeUSDC.totalSupply(), initialTotalSupply, "Total supply should be unchanged");
+        assertEq(usdc.balanceOf(address(primeUSDC)), initialVaultBalance, "Vault balance should be unchanged");
 
         // Test unpause permissions
         vm.prank(user);
         vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user));
-        vaultStrategy.unpause();
+        primeUSDC.unpause();
 
         // Unpause the contract as owner
         vm.prank(owner);
-        vaultStrategy.unpause();
-        assertFalse(vaultStrategy.paused(), "Vault should be unpaused");
+        primeUSDC.unpause();
+        assertFalse(primeUSDC.paused(), "Vault should be unpaused");
 
         // Verify withdrawal works after unpausing
         vm.prank(user);
-        vaultStrategy.withdraw(depositAmount, user, user);
+        primeUSDC.withdraw(depositAmount, user, user);
 
         // Verify final state after successful withdrawal
-        assertEq(vaultStrategy.balanceOf(user), 0, "User should have no remaining shares");
+        assertEq(primeUSDC.balanceOf(user), 0, "User should have no remaining shares");
         assertApproxEqRel(
             usdc.balanceOf(user),
             initialUserBalance + depositAmount,
             0.01e18, // 1% tolerance
             "Incorrect user balance after withdrawal"
         );
-        assertEq(
-            vaultStrategy.totalSupply(), initialTotalSupply - depositAmount, "Incorrect total supply after withdrawal"
-        );
+        assertEq(primeUSDC.totalSupply(), initialTotalSupply - depositAmount, "Incorrect total supply after withdrawal");
     }
 
     function testZeroWithdraw() public {
         // Setup: Initial deposit to have some funds in the vault
         uint256 depositAmount = 100_000_000; // 100 USDC
         vm.prank(user);
-        vaultStrategy.deposit(depositAmount, user);
+        primeUSDC.deposit(depositAmount, user);
 
         // Record initial states
         uint256 initialUserBalance = usdc.balanceOf(user);
-        uint256 initialUserShares = vaultStrategy.balanceOf(user);
-        uint256 initialTotalSupply = vaultStrategy.totalSupply();
+        uint256 initialUserShares = primeUSDC.balanceOf(user);
+        uint256 initialTotalSupply = primeUSDC.totalSupply();
 
         // Attempt to withdraw zero amount
         vm.prank(user);
         vm.expectRevert();
-        vaultStrategy.withdraw(0, user, user);
+        primeUSDC.withdraw(0, user, user);
 
         // Verify no state changes
-        assertEq(vaultStrategy.balanceOf(user), initialUserShares, "User shares should remain unchanged");
+        assertEq(primeUSDC.balanceOf(user), initialUserShares, "User shares should remain unchanged");
         assertEq(usdc.balanceOf(user), initialUserBalance, "User USDC balance should remain unchanged");
-        assertEq(vaultStrategy.totalSupply(), initialTotalSupply, "Total supply should remain unchanged");
+        assertEq(primeUSDC.totalSupply(), initialTotalSupply, "Total supply should remain unchanged");
     }
 
     function testFuzzWithdraw(uint256 depositAmount, uint256 withdrawAmount) public {
@@ -989,19 +977,19 @@ contract Vault_StrategyTest is Test {
         console.log("preDepositBalance", preDepositBalance);
         // Initial deposit
         vm.startPrank(user);
-        vaultStrategy.deposit(depositAmount, user);
+        primeUSDC.deposit(depositAmount, user);
 
         // Record state before withdrawal
         uint256 preWithdrawBalance = usdc.balanceOf(user);
         console.log("Balance before withdrawal", preWithdrawBalance);
-        uint256 preWithdrawShares = vaultStrategy.balanceOf(user);
+        uint256 preWithdrawShares = primeUSDC.balanceOf(user);
         console.log("Shares before withdrawal", preWithdrawShares);
 
         // Perform withdrawal
         if (withdrawAmount == 0) {
             vm.expectRevert();
         }
-        vaultStrategy.withdraw(withdrawAmount, user, user);
+        primeUSDC.withdraw(withdrawAmount, user, user);
 
         // Verify state after withdrawal
         if (withdrawAmount > 0) {
@@ -1012,7 +1000,7 @@ contract Vault_StrategyTest is Test {
                 "Incorrect USDC balance after withdrawal"
             );
             assertEq(
-                vaultStrategy.balanceOf(user),
+                primeUSDC.balanceOf(user),
                 preWithdrawShares - withdrawAmount,
                 "Incorrect share balance after withdrawal"
             );
@@ -1027,13 +1015,13 @@ contract Vault_StrategyTest is Test {
         deal(address(usdc), user, depositAmount);
 
         vm.startPrank(user);
-        usdc.approve(address(vaultStrategy), depositAmount);
-        vaultStrategy.deposit(depositAmount, user);
+        usdc.approve(address(primeUSDC), depositAmount);
+        primeUSDC.deposit(depositAmount, user);
         vm.stopPrank();
 
         // Get actual initial balances after deposit
-        uint256 initialAUSDCBalance = IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy));
-        uint256 initialDebtBalance = IERC20(vaultStrategy.variableDebtCbETH()).balanceOf(address(vaultStrategy));
+        uint256 initialAUSDCBalance = IERC20(primeUSDC.aUSDC()).balanceOf(address(primeUSDC));
+        uint256 initialDebtBalance = IERC20(primeUSDC.variableDebtCbETH()).balanceOf(address(primeUSDC));
 
         console.log("Initial aUSDC Balance:", initialAUSDCBalance);
         console.log("Initial Debt Balance:", initialDebtBalance);
@@ -1046,8 +1034,8 @@ contract Vault_StrategyTest is Test {
         uint256 newAUSDCBalance = initialAUSDCBalance + increaseInSupply;
         console.log("aUSDC interest earned:", newAUSDCBalance - initialAUSDCBalance);
         vm.mockCall(
-            vaultStrategy.aUSDC(),
-            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            primeUSDC.aUSDC(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(primeUSDC)),
             abi.encode(newAUSDCBalance)
         );
 
@@ -1056,18 +1044,18 @@ contract Vault_StrategyTest is Test {
         uint256 newDebtBalance = initialDebtBalance + increaseInDebt;
         console.log("cbETH debt increase:", newDebtBalance - initialDebtBalance);
         vm.mockCall(
-            vaultStrategy.variableDebtCbETH(),
-            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            primeUSDC.variableDebtCbETH(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(primeUSDC)),
             abi.encode(newDebtBalance)
         );
 
         // Get real prices from Chainlink
         address[] memory dataFeeds = new address[](3);
-        dataFeeds[0] = vaultStrategy.cbEthUsdDataFeedAddress();
-        dataFeeds[1] = vaultStrategy.usdcUsdDataFeedAddress();
-        dataFeeds[2] = vaultStrategy.aeroUsdDataFeedAddress();
+        dataFeeds[0] = primeUSDC.cbEthUsdDataFeedAddress();
+        dataFeeds[1] = primeUSDC.usdcUsdDataFeedAddress();
+        dataFeeds[2] = primeUSDC.aeroUsdDataFeedAddress();
 
-        uint256[] memory prices = vaultStrategy.getChainlinkDataFeedLatestAnswer(dataFeeds);
+        uint256[] memory prices = primeUSDC.getChainlinkDataFeedLatestAnswer(dataFeeds);
 
         // Calculate rewards
         uint256 monthlyRewardValue = (depositAmount * 45) / (12 * 100); // 375
@@ -1081,25 +1069,25 @@ contract Vault_StrategyTest is Test {
 
         // Setup mock for claimFees
         vm.mockCall(
-            address(vaultStrategy.aerodromePool()),
+            address(primeUSDC.aerodromePool()),
             abi.encodeWithSelector(IPool.claimFees.selector),
             abi.encode(usdcRewards, aeroRewards)
         );
 
         // Mock AERO balance after claiming
-        deal(address(vaultStrategy.AERO()), address(vaultStrategy), aeroRewards);
+        deal(address(primeUSDC.AERO()), address(primeUSDC), aeroRewards);
         // Mock additional USDC balance from fees
-        deal(address(usdc), address(vaultStrategy), usdcRewards);
+        deal(address(usdc), address(primeUSDC), usdcRewards);
 
         // Record state before harvest
-        uint256 totalAssetsBefore = vaultStrategy.totalAssets();
+        uint256 totalAssetsBefore = primeUSDC.totalAssets();
         console.log("Total assets before harvest:", totalAssetsBefore);
 
         // Call harvest as owner
         vm.prank(owner);
-        vaultStrategy.harvestReinvestAndReport();
+        primeUSDC.harvestReinvestAndReport();
 
-        uint256 totalAssetsAfter = vaultStrategy.totalAssets();
+        uint256 totalAssetsAfter = primeUSDC.totalAssets();
         console.log("Total assets after harvest:", totalAssetsAfter);
         console.log("Asset increase:", totalAssetsAfter - totalAssetsBefore);
         uint256 strategistBal = usdc.balanceOf(address(owner));
@@ -1115,13 +1103,13 @@ contract Vault_StrategyTest is Test {
         deal(address(usdc), user, depositAmount);
 
         vm.startPrank(user);
-        usdc.approve(address(vaultStrategy), depositAmount);
-        vaultStrategy.deposit(depositAmount, user);
+        usdc.approve(address(primeUSDC), depositAmount);
+        primeUSDC.deposit(depositAmount, user);
         vm.stopPrank();
 
         // Get actual initial balances after deposit
-        uint256 initialAUSDCBalance = IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy));
-        uint256 initialDebtBalance = IERC20(vaultStrategy.variableDebtCbETH()).balanceOf(address(vaultStrategy));
+        uint256 initialAUSDCBalance = IERC20(primeUSDC.aUSDC()).balanceOf(address(primeUSDC));
+        uint256 initialDebtBalance = IERC20(primeUSDC.variableDebtCbETH()).balanceOf(address(primeUSDC));
 
         console.log("Initial aUSDC Balance:", initialAUSDCBalance);
         console.log("Initial Debt Balance:", initialDebtBalance);
@@ -1134,8 +1122,8 @@ contract Vault_StrategyTest is Test {
         uint256 newAUSDCBalance = initialAUSDCBalance + increaseInSupply;
         console.log("aUSDC interest earned:", newAUSDCBalance - initialAUSDCBalance);
         vm.mockCall(
-            vaultStrategy.aUSDC(),
-            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            primeUSDC.aUSDC(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(primeUSDC)),
             abi.encode(newAUSDCBalance)
         );
 
@@ -1144,18 +1132,18 @@ contract Vault_StrategyTest is Test {
         uint256 newDebtBalance = initialDebtBalance + increaseInDebt;
         console.log("cbETH debt increase:", newDebtBalance - initialDebtBalance);
         vm.mockCall(
-            vaultStrategy.variableDebtCbETH(),
-            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            primeUSDC.variableDebtCbETH(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(primeUSDC)),
             abi.encode(newDebtBalance)
         );
 
         // Get real prices from Chainlink
         address[] memory dataFeeds = new address[](3);
-        dataFeeds[0] = vaultStrategy.cbEthUsdDataFeedAddress();
-        dataFeeds[1] = vaultStrategy.usdcUsdDataFeedAddress();
-        dataFeeds[2] = vaultStrategy.aeroUsdDataFeedAddress();
+        dataFeeds[0] = primeUSDC.cbEthUsdDataFeedAddress();
+        dataFeeds[1] = primeUSDC.usdcUsdDataFeedAddress();
+        dataFeeds[2] = primeUSDC.aeroUsdDataFeedAddress();
 
-        uint256[] memory prices = vaultStrategy.getChainlinkDataFeedLatestAnswer(dataFeeds);
+        uint256[] memory prices = primeUSDC.getChainlinkDataFeedLatestAnswer(dataFeeds);
 
         // Calculate reduced rewards (15% of normal)
         uint256 monthlyRewardValue = (depositAmount * 45) / (12 * 100); // Normal monthly reward
@@ -1169,25 +1157,25 @@ contract Vault_StrategyTest is Test {
 
         // Setup mock for claimFees with reduced rewards
         vm.mockCall(
-            address(vaultStrategy.aerodromePool()),
+            address(primeUSDC.aerodromePool()),
             abi.encodeWithSelector(IPool.claimFees.selector),
             abi.encode(usdcRewards, aeroRewards)
         );
 
         // Mock AERO balance after claiming
-        deal(address(vaultStrategy.AERO()), address(vaultStrategy), aeroRewards);
+        deal(address(primeUSDC.AERO()), address(primeUSDC), aeroRewards);
         // Mock additional USDC balance from fees
-        deal(address(usdc), address(vaultStrategy), usdcRewards);
+        deal(address(usdc), address(primeUSDC), usdcRewards);
 
         // Record state before harvest
-        uint256 totalAssetsBefore = vaultStrategy.totalAssets();
+        uint256 totalAssetsBefore = primeUSDC.totalAssets();
         console.log("Total assets before harvest:", totalAssetsBefore);
 
         // Call harvest as owner
         vm.prank(owner);
-        vaultStrategy.harvestReinvestAndReport();
+        primeUSDC.harvestReinvestAndReport();
 
-        uint256 totalAssetsAfter = vaultStrategy.totalAssets();
+        uint256 totalAssetsAfter = primeUSDC.totalAssets();
         console.log("Total assets after harvest:", totalAssetsAfter);
         console.log("Asset change:", int256(totalAssetsAfter) - int256(totalAssetsBefore));
         uint256 strategistBal = usdc.balanceOf(address(owner));
@@ -1203,13 +1191,13 @@ contract Vault_StrategyTest is Test {
         deal(address(usdc), user, depositAmount);
 
         vm.startPrank(user);
-        usdc.approve(address(vaultStrategy), depositAmount);
-        vaultStrategy.deposit(depositAmount, user);
+        usdc.approve(address(primeUSDC), depositAmount);
+        primeUSDC.deposit(depositAmount, user);
         vm.stopPrank();
 
         // Get actual initial balances after deposit
-        uint256 initialAUSDCBalance = IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy));
-        uint256 initialDebtBalance = IERC20(vaultStrategy.variableDebtCbETH()).balanceOf(address(vaultStrategy));
+        uint256 initialAUSDCBalance = IERC20(primeUSDC.aUSDC()).balanceOf(address(primeUSDC));
+        uint256 initialDebtBalance = IERC20(primeUSDC.variableDebtCbETH()).balanceOf(address(primeUSDC));
 
         console.log("\n=== Initial State ===");
         console.log("Initial aUSDC Balance:", initialAUSDCBalance);
@@ -1226,8 +1214,8 @@ contract Vault_StrategyTest is Test {
         uint256 newAUSDCBalance1 = initialAUSDCBalance + increaseInSupply1;
         console.log("aUSDC interest earned (1st):", newAUSDCBalance1 - initialAUSDCBalance);
         vm.mockCall(
-            vaultStrategy.aUSDC(),
-            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            primeUSDC.aUSDC(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(primeUSDC)),
             abi.encode(newAUSDCBalance1)
         );
 
@@ -1236,17 +1224,17 @@ contract Vault_StrategyTest is Test {
         uint256 newDebtBalance1 = initialDebtBalance + increaseInDebt1;
         console.log("cbETH debt increase (1st):", newDebtBalance1 - initialDebtBalance);
         vm.mockCall(
-            vaultStrategy.variableDebtCbETH(),
-            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            primeUSDC.variableDebtCbETH(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(primeUSDC)),
             abi.encode(newDebtBalance1)
         );
 
         // Get prices from Chainlink
         address[] memory dataFeeds = new address[](3);
-        dataFeeds[0] = vaultStrategy.cbEthUsdDataFeedAddress();
-        dataFeeds[1] = vaultStrategy.usdcUsdDataFeedAddress();
-        dataFeeds[2] = vaultStrategy.aeroUsdDataFeedAddress();
-        uint256[] memory prices = vaultStrategy.getChainlinkDataFeedLatestAnswer(dataFeeds);
+        dataFeeds[0] = primeUSDC.cbEthUsdDataFeedAddress();
+        dataFeeds[1] = primeUSDC.usdcUsdDataFeedAddress();
+        dataFeeds[2] = primeUSDC.aeroUsdDataFeedAddress();
+        uint256[] memory prices = primeUSDC.getChainlinkDataFeedLatestAnswer(dataFeeds);
 
         // Calculate rewards (only AERO, no USDC)
         uint256 monthlyRewardValue1 = (depositAmount * 45) / (24 * 100); // Half-month reward
@@ -1256,22 +1244,22 @@ contract Vault_StrategyTest is Test {
 
         // Setup mock for claimFees (zero USDC rewards)
         vm.mockCall(
-            address(vaultStrategy.aerodromePool()),
+            address(primeUSDC.aerodromePool()),
             abi.encodeWithSelector(IPool.claimFees.selector),
             abi.encode(0, aeroRewards1)
         );
 
         // Mock AERO balance
-        deal(address(vaultStrategy.AERO()), address(vaultStrategy), aeroRewards1);
+        deal(address(primeUSDC.AERO()), address(primeUSDC), aeroRewards1);
 
         // Record state and perform first harvest
-        uint256 totalAssetsBeforeFirst = vaultStrategy.totalAssets();
+        uint256 totalAssetsBeforeFirst = primeUSDC.totalAssets();
         console.log("Total assets before first harvest:", totalAssetsBeforeFirst);
 
         vm.prank(owner);
-        vaultStrategy.harvestReinvestAndReport();
+        primeUSDC.harvestReinvestAndReport();
 
-        uint256 totalAssetsAfterFirst = vaultStrategy.totalAssets();
+        uint256 totalAssetsAfterFirst = primeUSDC.totalAssets();
         console.log("Total assets after first harvest:", totalAssetsAfterFirst);
         console.log("Asset change (first):", int256(totalAssetsAfterFirst) - int256(totalAssetsBeforeFirst));
 
@@ -1286,8 +1274,8 @@ contract Vault_StrategyTest is Test {
         uint256 newAUSDCBalance2 = newAUSDCBalance1 + increaseInSupply2;
         console.log("aUSDC interest earned (2nd):", newAUSDCBalance2 - newAUSDCBalance1);
         vm.mockCall(
-            vaultStrategy.aUSDC(),
-            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            primeUSDC.aUSDC(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(primeUSDC)),
             abi.encode(newAUSDCBalance2)
         );
 
@@ -1296,8 +1284,8 @@ contract Vault_StrategyTest is Test {
         uint256 newDebtBalance2 = newDebtBalance1 + increaseInDebt2;
         console.log("cbETH debt increase (2nd):", newDebtBalance2 - newDebtBalance1);
         vm.mockCall(
-            vaultStrategy.variableDebtCbETH(),
-            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            primeUSDC.variableDebtCbETH(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(primeUSDC)),
             abi.encode(newDebtBalance2)
         );
 
@@ -1309,22 +1297,22 @@ contract Vault_StrategyTest is Test {
 
         // Setup mock for claimFees (zero AERO rewards)
         vm.mockCall(
-            address(vaultStrategy.aerodromePool()),
+            address(primeUSDC.aerodromePool()),
             abi.encodeWithSelector(IPool.claimFees.selector),
             abi.encode(usdcRewards2, 0)
         );
 
         // Mock USDC balance
-        deal(address(usdc), address(vaultStrategy), usdcRewards2);
+        deal(address(usdc), address(primeUSDC), usdcRewards2);
 
         // Record state and perform second harvest
-        uint256 totalAssetsBeforeSecond = vaultStrategy.totalAssets();
+        uint256 totalAssetsBeforeSecond = primeUSDC.totalAssets();
         console.log("Total assets before second harvest:", totalAssetsBeforeSecond);
 
         vm.prank(owner);
-        vaultStrategy.harvestReinvestAndReport();
+        primeUSDC.harvestReinvestAndReport();
 
-        uint256 totalAssetsAfterSecond = vaultStrategy.totalAssets();
+        uint256 totalAssetsAfterSecond = primeUSDC.totalAssets();
         uint256 strategistBal = usdc.balanceOf(address(owner));
         console.log("Total assets after second harvest:", totalAssetsAfterSecond);
         console.log("Asset change (second):", int256(totalAssetsAfterSecond) - int256(totalAssetsBeforeSecond));
@@ -1352,18 +1340,18 @@ contract Vault_StrategyTest is Test {
         console.log("User USDC balance before deposit:", usdc.balanceOf(user));
 
         vm.startPrank(user);
-        usdc.approve(address(vaultStrategy), depositAmount);
-        uint256 sharesReceived = vaultStrategy.deposit(depositAmount, user);
+        usdc.approve(address(primeUSDC), depositAmount);
+        uint256 sharesReceived = primeUSDC.deposit(depositAmount, user);
         vm.stopPrank();
 
         console.log("Shares received:", sharesReceived);
         console.log("User USDC balance after deposit:", usdc.balanceOf(user));
-        console.log("Vault total assets:", vaultStrategy.totalAssets());
+        console.log("Vault total assets:", primeUSDC.totalAssets());
 
         // Get initial balances after deposit
-        uint256 initialAUSDCBalance = IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy));
-        uint256 initialDebtBalance = IERC20(vaultStrategy.variableDebtCbETH()).balanceOf(address(vaultStrategy));
-        uint256 initialLPBalance = IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy));
+        uint256 initialAUSDCBalance = IERC20(primeUSDC.aUSDC()).balanceOf(address(primeUSDC));
+        uint256 initialDebtBalance = IERC20(primeUSDC.variableDebtCbETH()).balanceOf(address(primeUSDC));
+        uint256 initialLPBalance = IERC20(address(primeUSDC.aerodromePool())).balanceOf(address(primeUSDC));
 
         console.log("\n=== Initial Position ===");
         console.log("Initial aUSDC Balance:", initialAUSDCBalance);
@@ -1379,8 +1367,8 @@ contract Vault_StrategyTest is Test {
         console.log("\n=== Aave Yields ===");
         console.log("aUSDC interest earned:", newAUSDCBalance - initialAUSDCBalance);
         vm.mockCall(
-            vaultStrategy.aUSDC(),
-            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            primeUSDC.aUSDC(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(primeUSDC)),
             abi.encode(newAUSDCBalance)
         );
 
@@ -1389,17 +1377,17 @@ contract Vault_StrategyTest is Test {
         uint256 newDebtBalance = initialDebtBalance + increaseInDebt;
         console.log("cbETH debt increase:", newDebtBalance - initialDebtBalance);
         vm.mockCall(
-            vaultStrategy.variableDebtCbETH(),
-            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            primeUSDC.variableDebtCbETH(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(primeUSDC)),
             abi.encode(newDebtBalance)
         );
 
         // Get Chainlink prices
         address[] memory dataFeeds = new address[](3);
-        dataFeeds[0] = vaultStrategy.cbEthUsdDataFeedAddress();
-        dataFeeds[1] = vaultStrategy.usdcUsdDataFeedAddress();
-        dataFeeds[2] = vaultStrategy.aeroUsdDataFeedAddress();
-        uint256[] memory prices = vaultStrategy.getChainlinkDataFeedLatestAnswer(dataFeeds);
+        dataFeeds[0] = primeUSDC.cbEthUsdDataFeedAddress();
+        dataFeeds[1] = primeUSDC.usdcUsdDataFeedAddress();
+        dataFeeds[2] = primeUSDC.aeroUsdDataFeedAddress();
+        uint256[] memory prices = primeUSDC.getChainlinkDataFeedLatestAnswer(dataFeeds);
 
         // Calculate Aerodrome rewards
         uint256 monthlyRewardValue = (depositAmount * 45) / (12 * 100); // 3.75% monthly reward rate
@@ -1412,27 +1400,27 @@ contract Vault_StrategyTest is Test {
 
         // Setup mock for claimFees
         vm.mockCall(
-            address(vaultStrategy.aerodromePool()),
+            address(primeUSDC.aerodromePool()),
             abi.encodeWithSelector(IPool.claimFees.selector),
             abi.encode(usdcRewards, aeroRewards)
         );
 
         // Mock rewards balances
-        deal(address(vaultStrategy.AERO()), address(vaultStrategy), aeroRewards);
-        deal(address(usdc), address(vaultStrategy), usdcRewards);
+        deal(address(primeUSDC.AERO()), address(primeUSDC), aeroRewards);
+        deal(address(usdc), address(primeUSDC), usdcRewards);
 
         // Record state before harvest
-        uint256 totalAssetsBeforeHarvest = vaultStrategy.totalAssets();
+        uint256 totalAssetsBeforeHarvest = primeUSDC.totalAssets();
         console.log("\n=== Pre-Harvest State ===");
         console.log("Total assets before harvest:", totalAssetsBeforeHarvest);
-        console.log("Share price before harvest:", vaultStrategy.convertToAssets(1e6));
+        console.log("Share price before harvest:", primeUSDC.convertToAssets(1e6));
 
         // Perform harvest
         vm.prank(owner);
-        vaultStrategy.harvestReinvestAndReport();
+        primeUSDC.harvestReinvestAndReport();
 
-        uint256 totalAssetsAfterHarvest = vaultStrategy.totalAssets();
-        uint256 shareValueAfterHarvest = vaultStrategy.convertToAssets(1e6);
+        uint256 totalAssetsAfterHarvest = primeUSDC.totalAssets();
+        uint256 shareValueAfterHarvest = primeUSDC.convertToAssets(1e6);
 
         console.log("\n=== Post-Harvest State ===");
         console.log("Total assets after harvest:", totalAssetsAfterHarvest);
@@ -1446,24 +1434,24 @@ contract Vault_StrategyTest is Test {
 
         // Perform withdrawal
         console.log("\n=== Withdrawal ===");
-        uint256 userShares = vaultStrategy.balanceOf(user);
+        uint256 userShares = primeUSDC.balanceOf(user);
         console.log("User shares before withdrawal:", userShares);
-        console.log("Share value at withdrawal:", vaultStrategy.convertToAssets(1e6));
-        uint256 expectedAssets = vaultStrategy.convertToAssets(userShares);
+        console.log("Share value at withdrawal:", primeUSDC.convertToAssets(1e6));
+        uint256 expectedAssets = primeUSDC.convertToAssets(userShares);
         console.log("Expected assets to receive:", expectedAssets);
 
         vm.startPrank(user);
-        uint256 assetsReceived = vaultStrategy.redeem(userShares, user, user);
+        uint256 assetsReceived = primeUSDC.redeem(userShares, user, user);
         vm.stopPrank();
 
         console.log("\n=== Final State ===");
         console.log("Assets received:", assetsReceived);
         console.log("Final user USDC balance:", usdc.balanceOf(user));
-        console.log("Final user shares:", vaultStrategy.balanceOf(user));
-        console.log("Final vault total assets:", vaultStrategy.totalAssets());
+        console.log("Final user shares:", primeUSDC.balanceOf(user));
+        console.log("Final vault total assets:", primeUSDC.totalAssets());
 
         // Final assertions
-        assertEq(vaultStrategy.balanceOf(user), 0, "User should have no shares left");
+        assertEq(primeUSDC.balanceOf(user), 0, "User should have no shares left");
         assertGt(usdc.balanceOf(user), depositAmount, "User should receive more than deposited");
         assertApproxEqRel(
             assetsReceived,
@@ -1479,51 +1467,51 @@ contract Vault_StrategyTest is Test {
         deal(address(usdc), user, depositAmount);
 
         vm.startPrank(user);
-        usdc.approve(address(vaultStrategy), depositAmount);
-        vaultStrategy.deposit(depositAmount, user);
+        usdc.approve(address(primeUSDC), depositAmount);
+        primeUSDC.deposit(depositAmount, user);
         vm.stopPrank();
 
         // Fast forward time
         vm.warp(block.timestamp + 30 days);
 
         // Mock some yields to make sure there's something to harvest
-        uint256 initialAUSDCBalance = IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy));
+        uint256 initialAUSDCBalance = IERC20(primeUSDC.aUSDC()).balanceOf(address(primeUSDC));
         uint256 newAUSDCBalance = initialAUSDCBalance + (initialAUSDCBalance * 15) / (12 * 100);
         vm.mockCall(
-            vaultStrategy.aUSDC(),
-            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            primeUSDC.aUSDC(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(primeUSDC)),
             abi.encode(newAUSDCBalance)
         );
 
         // Record state before attempted harvest
-        uint256 totalAssetsBefore = vaultStrategy.totalAssets();
+        uint256 totalAssetsBefore = primeUSDC.totalAssets();
 
         // Attempt harvest as unauthorized user
         vm.prank(user);
         vm.expectRevert(abi.encodeWithSelector(OwnableUpgradeable.OwnableUnauthorizedAccount.selector, user));
-        vaultStrategy.harvestReinvestAndReport();
+        primeUSDC.harvestReinvestAndReport();
 
         // Verify no state changes occurred
-        assertEq(vaultStrategy.totalAssets(), totalAssetsBefore, "Total assets should remain unchanged");
+        assertEq(primeUSDC.totalAssets(), totalAssetsBefore, "Total assets should remain unchanged");
     }
 
     function testInvariantTotalAssetsZeroWhenNoShares() public {
         // Initial deposit
         uint256 depositAmount = 100_000_000; // 100 USDC
         vm.startPrank(user);
-        vaultStrategy.deposit(depositAmount, user);
+        primeUSDC.deposit(depositAmount, user);
 
         // Verify initial state
-        assertGt(vaultStrategy.totalSupply(), 0, "Should have shares after deposit");
-        assertGt(vaultStrategy.totalAssets(), 0, "Should have assets after deposit");
+        assertGt(primeUSDC.totalSupply(), 0, "Should have shares after deposit");
+        assertGt(primeUSDC.totalAssets(), 0, "Should have assets after deposit");
 
         // Full withdrawal
-        vaultStrategy.withdraw(depositAmount, user, user);
+        primeUSDC.withdraw(depositAmount, user, user);
         vm.stopPrank();
 
         // Verify invariant: totalAssets should be 0 when totalSupply is 0
-        assertEq(vaultStrategy.totalSupply(), 0, "Total supply should be 0 after full withdrawal");
-        assertEq(vaultStrategy.totalAssets(), 0, "Total assets should be 0 when total supply is 0");
+        assertEq(primeUSDC.totalSupply(), 0, "Total supply should be 0 after full withdrawal");
+        assertEq(primeUSDC.totalAssets(), 0, "Total assets should be 0 when total supply is 0");
     }
 
     // Additional test to verify the invariant holds after multiple operations
@@ -1538,41 +1526,41 @@ contract Vault_StrategyTest is Test {
 
         // Approve vault for all users
         vm.prank(user2);
-        usdc.approve(address(vaultStrategy), type(uint256).max);
+        usdc.approve(address(primeUSDC), type(uint256).max);
         vm.prank(user3);
-        usdc.approve(address(vaultStrategy), type(uint256).max);
+        usdc.approve(address(primeUSDC), type(uint256).max);
 
         // Multiple deposits and withdrawals
         vm.startPrank(user);
-        vaultStrategy.deposit(100 * 10 ** 6, user);
+        primeUSDC.deposit(100 * 10 ** 6, user);
         vm.stopPrank();
 
         vm.prank(user2);
-        vaultStrategy.deposit(200 * 10 ** 6, user2);
+        primeUSDC.deposit(200 * 10 ** 6, user2);
 
         vm.prank(user3);
-        vaultStrategy.deposit(300 * 10 ** 6, user3);
+        primeUSDC.deposit(300 * 10 ** 6, user3);
 
         // Partial withdrawals
         vm.prank(user);
-        vaultStrategy.withdraw(50 * 10 ** 6, user, user);
+        primeUSDC.withdraw(50 * 10 ** 6, user, user);
 
         vm.prank(user2);
-        vaultStrategy.withdraw(100 * 10 ** 6, user2, user2);
+        primeUSDC.withdraw(100 * 10 ** 6, user2, user2);
 
         // Full withdrawals
         vm.prank(user);
-        vaultStrategy.withdraw(50 * 10 ** 6, user, user);
+        primeUSDC.withdraw(50 * 10 ** 6, user, user);
 
         vm.prank(user2);
-        vaultStrategy.withdraw(100 * 10 ** 6, user2, user2);
+        primeUSDC.withdraw(100 * 10 ** 6, user2, user2);
 
         vm.prank(user3);
-        vaultStrategy.withdraw(300 * 10 ** 6, user3, user3);
+        primeUSDC.withdraw(300 * 10 ** 6, user3, user3);
 
         // Verify invariant after all operations
-        assertEq(vaultStrategy.totalSupply(), 0, "Total supply should be 0 after all withdrawals");
-        assertEq(vaultStrategy.totalAssets(), 0, "Total assets should be 0 when total supply is 0");
+        assertEq(primeUSDC.totalSupply(), 0, "Total supply should be 0 after all withdrawals");
+        assertEq(primeUSDC.totalAssets(), 0, "Total assets should be 0 when total supply is 0");
     }
 
     // Test invariant after harvest operations
@@ -1580,23 +1568,23 @@ contract Vault_StrategyTest is Test {
         // Initial deposit
         uint256 depositAmount = 100_000_000; // 100 USDC
         vm.startPrank(user);
-        vaultStrategy.deposit(depositAmount, user);
+        primeUSDC.deposit(depositAmount, user);
         vm.stopPrank();
 
         // Simulate time passing and perform harvest
         vm.warp(block.timestamp + 30 days);
         vm.prank(owner);
-        vaultStrategy.harvestReinvestAndReport();
+        primeUSDC.harvestReinvestAndReport();
 
         // Full withdrawal after harvest
         vm.startPrank(user);
-        uint256 shares = vaultStrategy.balanceOf(user);
-        vaultStrategy.redeem(shares, user, user);
+        uint256 shares = primeUSDC.balanceOf(user);
+        primeUSDC.redeem(shares, user, user);
         vm.stopPrank();
 
         // Verify invariant after harvest and withdrawal
-        assertEq(vaultStrategy.totalSupply(), 0, "Total supply should be 0 after full withdrawal");
-        assertEq(vaultStrategy.totalAssets(), 0, "Total assets should be 0 when total supply is 0");
+        assertEq(primeUSDC.totalSupply(), 0, "Total supply should be 0 after full withdrawal");
+        assertEq(primeUSDC.totalAssets(), 0, "Total assets should be 0 when total supply is 0");
     }
 
     function testCheckAndRebalanceOnly() public {
@@ -1604,79 +1592,75 @@ contract Vault_StrategyTest is Test {
         uint256 depositAmount = 10_000e6;
         deal(address(usdc), user, depositAmount);
         vm.startPrank(user);
-        usdc.approve(address(vaultStrategy), depositAmount);
-        vaultStrategy.deposit(depositAmount, user);
+        usdc.approve(address(primeUSDC), depositAmount);
+        primeUSDC.deposit(depositAmount, user);
         vm.stopPrank();
 
         // Grant rebalancer role to test address
         address rebalancer = makeAddr("rebalancer");
         vm.prank(owner);
-        vaultStrategy.grantRebalancerRole(rebalancer);
+        primeUSDC.grantRebalancerRole(rebalancer);
 
         // Test Case 1: Health factor is good (above target + buffer)
         uint256 goodHealthFactor = 1.5e18; // 1.5
 
-        uint256 currentHealthFactor = vaultStrategy.calculateHealthFactor();
+        uint256 currentHealthFactor = primeUSDC.calculateHealthFactor();
         vm.mockCall(
             AAVE_POOL_CONTRACT,
-            abi.encodeWithSelector(IPoolAave.getUserAccountData.selector, address(vaultStrategy)),
+            abi.encodeWithSelector(IPoolAave.getUserAccountData.selector, address(primeUSDC)),
             abi.encode(0, 0, 0, 0, 0, goodHealthFactor)
         );
 
         vm.prank(rebalancer);
-        vaultStrategy.checkAndRebalance(); // Should not trigger rebalance
+        primeUSDC.checkAndRebalance(); // Should not trigger rebalance
 
         // Clear mock and verify health factor remained unchanged
         vm.clearMockedCalls();
         assertEq(
-            vaultStrategy.calculateHealthFactor(),
-            currentHealthFactor,
-            "Health factor should remain unchanged when good"
+            primeUSDC.calculateHealthFactor(), currentHealthFactor, "Health factor should remain unchanged when good"
         );
 
         // Test Case 2: Health factor is below target + buffer
         uint256 lowHealthFactor = 1.01e18; // 1.01
         vm.mockCall(
             AAVE_POOL_CONTRACT,
-            abi.encodeWithSelector(IPoolAave.getUserAccountData.selector, address(vaultStrategy)),
+            abi.encodeWithSelector(IPoolAave.getUserAccountData.selector, address(primeUSDC)),
             abi.encode(0, 0, 0, 0, 0, lowHealthFactor)
         );
 
         vm.prank(rebalancer);
-        vaultStrategy.checkAndRebalance(); // Should trigger rebalance
+        primeUSDC.checkAndRebalance(); // Should trigger rebalance
 
         // Mock the improved health factor after rebalance
         vm.clearMockedCalls();
-        assertGt(
-            vaultStrategy.calculateHealthFactor(), lowHealthFactor, "Health factor should improve after rebalancing"
-        );
+        assertGt(primeUSDC.calculateHealthFactor(), lowHealthFactor, "Health factor should improve after rebalancing");
         // uint256 improvedHealthFactor = 1.2e18; // Expected improvement after rebalance
         // vm.mockCall(
         //     AAVE_POOL_CONTRACT,
-        //     abi.encodeWithSelector(IPoolAave.getUserAccountData.selector, address(vaultStrategy)),
+        //     abi.encodeWithSelector(IPoolAave.getUserAccountData.selector, address(primeUSDC)),
         //     abi.encode(0, 0, 0, 0, 0, improvedHealthFactor)
         // );
 
         // Test Case 3: Unauthorized caller
         vm.expectRevert(); // Should revert without rebalancer role
         vm.prank(user);
-        vaultStrategy.checkAndRebalance();
+        primeUSDC.checkAndRebalance();
 
         // Test Case 4: Very low health factor (near liquidation)
         uint256 criticalHealthFactor = 1.001e18; // 1.001
         vm.mockCall(
             AAVE_POOL_CONTRACT,
-            abi.encodeWithSelector(IPoolAave.getUserAccountData.selector, address(vaultStrategy)),
+            abi.encodeWithSelector(IPoolAave.getUserAccountData.selector, address(primeUSDC)),
             abi.encode(0, 0, 0, 0, 0, criticalHealthFactor)
         );
 
         vm.prank(rebalancer);
-        vaultStrategy.checkAndRebalance(); // Should trigger rebalance
+        primeUSDC.checkAndRebalance(); // Should trigger rebalance
 
         // Mock the improved health factor after critical rebalance
         vm.clearMockedCalls();
         assertGt(
-            vaultStrategy.calculateHealthFactor(),
+            primeUSDC.calculateHealthFactor(),
             criticalHealthFactor,
             "Health factor should significantly improve after critical rebalancing"
         );
@@ -1686,35 +1670,35 @@ contract Vault_StrategyTest is Test {
     function testCheckAndRebalanceWithZeroAssets() public {
         address rebalancer = makeAddr("rebalancer");
         vm.prank(owner);
-        vaultStrategy.grantRebalancerRole(rebalancer);
+        primeUSDC.grantRebalancerRole(rebalancer);
 
         // Verify initial state
-        assertEq(vaultStrategy.totalAssets(), 0, "Initial total assets should be 0");
-        assertEq(vaultStrategy.totalSupply(), 0, "Initial total supply should be 0");
+        assertEq(primeUSDC.totalAssets(), 0, "Initial total assets should be 0");
+        assertEq(primeUSDC.totalSupply(), 0, "Initial total supply should be 0");
 
         // Record initial balances of relevant tokens
-        uint256 initialAUsdcBalance = IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy));
-        uint256 initialLpBalance = IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy));
-        uint256 initialCbEthBalance = IERC20(vaultStrategy.cbETH()).balanceOf(address(vaultStrategy));
+        uint256 initialAUsdcBalance = IERC20(primeUSDC.aUSDC()).balanceOf(address(primeUSDC));
+        uint256 initialLpBalance = IERC20(address(primeUSDC.aerodromePool())).balanceOf(address(primeUSDC));
+        uint256 initialCbEthBalance = IERC20(primeUSDC.cbETH()).balanceOf(address(primeUSDC));
 
         vm.prank(rebalancer);
-        vaultStrategy.checkAndRebalance(); // Should not revert but also not trigger rebalance
+        primeUSDC.checkAndRebalance(); // Should not revert but also not trigger rebalance
 
         // Verify nothing changed after checkAndRebalance
-        assertEq(vaultStrategy.totalAssets(), 0, "Total assets  should remain 0");
-        assertEq(vaultStrategy.totalSupply(), 0, "Total supply should remain 0");
+        assertEq(primeUSDC.totalAssets(), 0, "Total assets  should remain 0");
+        assertEq(primeUSDC.totalSupply(), 0, "Total supply should remain 0");
         assertEq(
-            IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy)),
+            IERC20(primeUSDC.aUSDC()).balanceOf(address(primeUSDC)),
             initialAUsdcBalance,
             "aUSDC balance should not change"
         );
         assertEq(
-            IERC20(address(vaultStrategy.aerodromePool())).balanceOf(address(vaultStrategy)),
+            IERC20(address(primeUSDC.aerodromePool())).balanceOf(address(primeUSDC)),
             initialLpBalance,
             "LP token balance should not change"
         );
         assertEq(
-            IERC20(vaultStrategy.cbETH()).balanceOf(address(vaultStrategy)),
+            IERC20(primeUSDC.cbETH()).balanceOf(address(primeUSDC)),
             initialCbEthBalance,
             "cbETH balance should not change"
         );
@@ -1724,18 +1708,18 @@ contract Vault_StrategyTest is Test {
         // Initial deposit
         uint256 depositAmount = 10_000e6;
         vm.startPrank(user);
-        vaultStrategy.deposit(depositAmount, user);
+        primeUSDC.deposit(depositAmount, user);
         vm.stopPrank();
 
         // Deploy V2 implementation
-        VaultStrategyV2 implementationV2 = new VaultStrategyV2();
+        PrimeUSDCV2 implementationV2 = new PrimeUSDCV2();
 
-        console.log("Owner address:", vaultStrategy.owner());
+        console.log("Owner address:", primeUSDC.owner());
         console.log("Expected owner:", owner);
         console.log("Test contract address:", address(this));
 
         // Make sure we're using the correct owner address
-        assertEq(vaultStrategy.owner(), owner, "Owner check before upgrade");
+        assertEq(primeUSDC.owner(), owner, "Owner check before upgrade");
 
         // Upgrade to V2 using IUpgradeableProxy interface
         vm.prank(owner);
@@ -1745,7 +1729,7 @@ contract Vault_StrategyTest is Test {
         );
 
         // Cast proxy to V2 to access new functions
-        VaultStrategyV2 proxyV2 = VaultStrategyV2(address(proxy));
+        PrimeUSDCV2 proxyV2 = PrimeUSDCV2(address(proxy));
 
         // Test new functionality
         uint256 dummyResult = proxyV2.dummy(42);
@@ -1782,29 +1766,29 @@ contract Vault_StrategyTest is Test {
 
         // Alice deposits
         vm.startPrank(alice);
-        usdc.approve(address(vaultStrategy), aliceDeposit);
-        vaultStrategy.deposit(aliceDeposit, alice);
+        usdc.approve(address(primeUSDC), aliceDeposit);
+        primeUSDC.deposit(aliceDeposit, alice);
         vm.stopPrank();
 
-        uint256 totalAssetsAfterAlice = vaultStrategy.totalAssets();
-        uint256 totalSupplyAfterAlice = vaultStrategy.totalSupply();
+        uint256 totalAssetsAfterAlice = primeUSDC.totalAssets();
+        uint256 totalSupplyAfterAlice = primeUSDC.totalSupply();
         console.log("Total Assets after Alice:", totalAssetsAfterAlice);
         console.log("Total Supply after Alice:", totalSupplyAfterAlice);
 
         // Bob deposits
         vm.startPrank(bob);
-        usdc.approve(address(vaultStrategy), bobDeposit);
-        vaultStrategy.deposit(bobDeposit, bob);
+        usdc.approve(address(primeUSDC), bobDeposit);
+        primeUSDC.deposit(bobDeposit, bob);
         vm.stopPrank();
 
         // Charlie deposits
         vm.startPrank(charlie);
-        usdc.approve(address(vaultStrategy), charlieDeposit);
-        vaultStrategy.deposit(charlieDeposit, charlie);
+        usdc.approve(address(primeUSDC), charlieDeposit);
+        primeUSDC.deposit(charlieDeposit, charlie);
         vm.stopPrank();
 
-        uint256 totalAssetsAfterFirstWave = vaultStrategy.totalAssets();
-        uint256 totalSupplyAfterFirstWave = vaultStrategy.totalSupply();
+        uint256 totalAssetsAfterFirstWave = primeUSDC.totalAssets();
+        uint256 totalSupplyAfterFirstWave = primeUSDC.totalSupply();
         console.log("Total Assets after first wave:", totalAssetsAfterFirstWave);
         console.log("Total Supply after first wave:", totalSupplyAfterFirstWave);
 
@@ -1812,15 +1796,15 @@ contract Vault_StrategyTest is Test {
         vm.warp(block.timestamp + 30 days);
 
         // Get initial balances for harvest
-        uint256 initialAUSDCBalance = IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy));
-        uint256 initialDebtBalance = IERC20(vaultStrategy.variableDebtCbETH()).balanceOf(address(vaultStrategy));
+        uint256 initialAUSDCBalance = IERC20(primeUSDC.aUSDC()).balanceOf(address(primeUSDC));
+        uint256 initialDebtBalance = IERC20(primeUSDC.variableDebtCbETH()).balanceOf(address(primeUSDC));
 
         // Mock aUSDC balance increase (15% APY)
         uint256 increaseInSupply = (initialAUSDCBalance * 15) / (12 * 100); // Monthly rate
         uint256 newAUSDCBalance = initialAUSDCBalance + increaseInSupply;
         vm.mockCall(
-            vaultStrategy.aUSDC(),
-            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            primeUSDC.aUSDC(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(primeUSDC)),
             abi.encode(newAUSDCBalance)
         );
 
@@ -1828,8 +1812,8 @@ contract Vault_StrategyTest is Test {
         uint256 increaseInDebt = (initialDebtBalance * 25) / (12 * 1000);
         uint256 newDebtBalance = initialDebtBalance + increaseInDebt;
         vm.mockCall(
-            vaultStrategy.variableDebtCbETH(),
-            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            primeUSDC.variableDebtCbETH(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(primeUSDC)),
             abi.encode(newDebtBalance)
         );
 
@@ -1839,26 +1823,26 @@ contract Vault_StrategyTest is Test {
 
         // Get prices for conversion
         address[] memory dataFeeds = new address[](3);
-        dataFeeds[0] = vaultStrategy.cbEthUsdDataFeedAddress();
-        dataFeeds[1] = vaultStrategy.usdcUsdDataFeedAddress();
-        dataFeeds[2] = vaultStrategy.aeroUsdDataFeedAddress();
-        uint256[] memory prices = vaultStrategy.getChainlinkDataFeedLatestAnswer(dataFeeds);
+        dataFeeds[0] = primeUSDC.cbEthUsdDataFeedAddress();
+        dataFeeds[1] = primeUSDC.usdcUsdDataFeedAddress();
+        dataFeeds[2] = primeUSDC.aeroUsdDataFeedAddress();
+        uint256[] memory prices = primeUSDC.getChainlinkDataFeedLatestAnswer(dataFeeds);
 
         uint256 aeroRewards = ((monthlyRewardValue / 2) * prices[1] * 1e18) / (prices[2] * 1e6);
 
         vm.mockCall(
-            address(vaultStrategy.aerodromePool()),
+            address(primeUSDC.aerodromePool()),
             abi.encodeWithSelector(IPool.claimFees.selector),
             abi.encode(usdcRewards, aeroRewards)
         );
 
         // Mock AERO balance and USDC rewards
-        deal(address(vaultStrategy.AERO()), address(vaultStrategy), aeroRewards);
-        deal(address(usdc), address(vaultStrategy), usdcRewards);
+        deal(address(primeUSDC.AERO()), address(primeUSDC), aeroRewards);
+        deal(address(usdc), address(primeUSDC), usdcRewards);
 
         console.log("\n=== First Harvest ===");
         vm.prank(owner);
-        vaultStrategy.harvestReinvestAndReport();
+        primeUSDC.harvestReinvestAndReport();
 
         // Second wave of deposits
         uint256 daveDeposit = 20_000e6; // 20,000 USDC
@@ -1875,24 +1859,24 @@ contract Vault_StrategyTest is Test {
 
         // Dave deposits
         vm.startPrank(dave);
-        usdc.approve(address(vaultStrategy), daveDeposit);
-        vaultStrategy.deposit(daveDeposit, dave);
+        usdc.approve(address(primeUSDC), daveDeposit);
+        primeUSDC.deposit(daveDeposit, dave);
         vm.stopPrank();
 
         // Eve deposits
         vm.startPrank(eve);
-        usdc.approve(address(vaultStrategy), eveDeposit);
-        vaultStrategy.deposit(eveDeposit, eve);
+        usdc.approve(address(primeUSDC), eveDeposit);
+        primeUSDC.deposit(eveDeposit, eve);
         vm.stopPrank();
 
         // Alice makes second deposit
         vm.startPrank(alice);
-        usdc.approve(address(vaultStrategy), aliceSecondDeposit);
-        vaultStrategy.deposit(aliceSecondDeposit, alice);
+        usdc.approve(address(primeUSDC), aliceSecondDeposit);
+        primeUSDC.deposit(aliceSecondDeposit, alice);
         vm.stopPrank();
 
-        uint256 totalAssetsAfterSecondWave = vaultStrategy.totalAssets();
-        uint256 totalSupplyAfterSecondWave = vaultStrategy.totalSupply();
+        uint256 totalAssetsAfterSecondWave = primeUSDC.totalAssets();
+        uint256 totalSupplyAfterSecondWave = primeUSDC.totalSupply();
         console.log("Total Assets after second wave:", totalAssetsAfterSecondWave);
         console.log("Total Supply after second wave:", totalSupplyAfterSecondWave);
 
@@ -1901,29 +1885,29 @@ contract Vault_StrategyTest is Test {
 
         // Charlie withdraws half
         vm.startPrank(charlie);
-        uint256 charlieShares = vaultStrategy.balanceOf(charlie);
-        vaultStrategy.withdraw(charlieShares / 2, charlie, charlie);
+        uint256 charlieShares = primeUSDC.balanceOf(charlie);
+        primeUSDC.withdraw(charlieShares / 2, charlie, charlie);
         vm.stopPrank();
 
         // Bob withdraws everything
         vm.startPrank(bob);
-        uint256 bobShares = vaultStrategy.balanceOf(bob);
-        vaultStrategy.redeem(bobShares, bob, bob);
+        uint256 bobShares = primeUSDC.balanceOf(bob);
+        primeUSDC.redeem(bobShares, bob, bob);
         vm.stopPrank();
 
         // Second Harvest (after another 30 days)
         vm.warp(block.timestamp + 30 days);
 
         // Get balances before second harvest
-        initialAUSDCBalance = IERC20(vaultStrategy.aUSDC()).balanceOf(address(vaultStrategy));
-        initialDebtBalance = IERC20(vaultStrategy.variableDebtCbETH()).balanceOf(address(vaultStrategy));
+        initialAUSDCBalance = IERC20(primeUSDC.aUSDC()).balanceOf(address(primeUSDC));
+        initialDebtBalance = IERC20(primeUSDC.variableDebtCbETH()).balanceOf(address(primeUSDC));
 
         // Mock higher aUSDC balance increase (18% APY due to more TVL)
         increaseInSupply = (initialAUSDCBalance * 18) / (12 * 100);
         newAUSDCBalance = initialAUSDCBalance + increaseInSupply;
         vm.mockCall(
-            vaultStrategy.aUSDC(),
-            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            primeUSDC.aUSDC(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(primeUSDC)),
             abi.encode(newAUSDCBalance)
         );
 
@@ -1931,8 +1915,8 @@ contract Vault_StrategyTest is Test {
         increaseInDebt = (initialDebtBalance * 25) / (12 * 1000);
         newDebtBalance = initialDebtBalance + increaseInDebt;
         vm.mockCall(
-            vaultStrategy.variableDebtCbETH(),
-            abi.encodeWithSelector(IERC20.balanceOf.selector, address(vaultStrategy)),
+            primeUSDC.variableDebtCbETH(),
+            abi.encodeWithSelector(IERC20.balanceOf.selector, address(primeUSDC)),
             abi.encode(newDebtBalance)
         );
 
@@ -1942,21 +1926,21 @@ contract Vault_StrategyTest is Test {
         aeroRewards = ((monthlyRewardValue / 2) * prices[1] * 1e18) / (prices[2] * 1e6);
 
         vm.mockCall(
-            address(vaultStrategy.aerodromePool()),
+            address(primeUSDC.aerodromePool()),
             abi.encodeWithSelector(IPool.claimFees.selector),
             abi.encode(usdcRewards, aeroRewards)
         );
 
         // Mock AERO balance and USDC rewards for second harvest
-        deal(address(vaultStrategy.AERO()), address(vaultStrategy), aeroRewards);
-        deal(address(usdc), address(vaultStrategy), usdcRewards);
+        deal(address(primeUSDC.AERO()), address(primeUSDC), aeroRewards);
+        deal(address(usdc), address(primeUSDC), usdcRewards);
 
         console.log("\n=== Second Harvest ===");
         vm.prank(owner);
-        vaultStrategy.harvestReinvestAndReport();
+        primeUSDC.harvestReinvestAndReport();
 
-        uint256 totalAssetsAfterSecondHarvest = vaultStrategy.totalAssets();
-        uint256 totalSupplyAfterSecondHarvest = vaultStrategy.totalSupply();
+        uint256 totalAssetsAfterSecondHarvest = primeUSDC.totalAssets();
+        uint256 totalSupplyAfterSecondHarvest = primeUSDC.totalSupply();
         console.log("Total Assets after second harvest:", totalAssetsAfterSecondHarvest);
         console.log("Total Supply after second harvest:", totalSupplyAfterSecondHarvest);
 
@@ -1965,30 +1949,30 @@ contract Vault_StrategyTest is Test {
 
         // Eve withdraws 75%
         vm.startPrank(eve);
-        uint256 eveShares = vaultStrategy.balanceOf(eve);
-        vaultStrategy.withdraw((eveShares * 75) / 100, eve, eve);
+        uint256 eveShares = primeUSDC.balanceOf(eve);
+        primeUSDC.withdraw((eveShares * 75) / 100, eve, eve);
         vm.stopPrank();
 
         // Dave withdraws everything
         vm.startPrank(dave);
-        uint256 daveShares = vaultStrategy.balanceOf(dave);
-        vaultStrategy.redeem(daveShares, dave, dave);
+        uint256 daveShares = primeUSDC.balanceOf(dave);
+        primeUSDC.redeem(daveShares, dave, dave);
         vm.stopPrank();
 
         // Final state checks
-        uint256 finalTotalAssets = vaultStrategy.totalAssets();
-        uint256 finalTotalSupply = vaultStrategy.totalSupply();
+        uint256 finalTotalAssets = primeUSDC.totalAssets();
+        uint256 finalTotalSupply = primeUSDC.totalSupply();
         console.log("\n=== Final State ===");
         console.log("Final Total Assets:", finalTotalAssets);
         console.log("Final Total Supply:", finalTotalSupply);
 
         // Verify remaining balances
-        console.log("Alice's final shares:", vaultStrategy.balanceOf(alice));
-        console.log("Charlie's final shares:", vaultStrategy.balanceOf(charlie));
-        console.log("Eve's final shares:", vaultStrategy.balanceOf(eve));
+        console.log("Alice's final shares:", primeUSDC.balanceOf(alice));
+        console.log("Charlie's final shares:", primeUSDC.balanceOf(charlie));
+        console.log("Eve's final shares:", primeUSDC.balanceOf(eve));
 
         // Verify Bob and Dave have fully withdrawn
-        assertEq(vaultStrategy.balanceOf(bob), 0, "Bob should have no shares");
-        assertEq(vaultStrategy.balanceOf(dave), 0, "Dave should have no shares");
+        assertEq(primeUSDC.balanceOf(bob), 0, "Bob should have no shares");
+        assertEq(primeUSDC.balanceOf(dave), 0, "Dave should have no shares");
     }
 }

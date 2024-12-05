@@ -2,13 +2,13 @@
 pragma solidity ^0.8.26;
 
 import {Script, console} from "forge-std/Script.sol";
-import {VaultStrategy} from "../src/Vault_Strategy.sol";
+import {PrimeUSDC} from "../src/Vault_Strategy.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 import {ProxyAdmin} from "@openzeppelin/contracts/proxy/transparent/ProxyAdmin.sol";
 
-contract Vault_StrategyScript is Script {
-    VaultStrategy public vaultStrategyImplementation;
+contract PrimeUSDCScript is Script {
+    PrimeUSDC public primeUSDCImplementation;
     TransparentUpgradeableProxy public proxy;
     ProxyAdmin public proxyAdmin;
 
@@ -20,7 +20,7 @@ contract Vault_StrategyScript is Script {
         vm.startBroadcast(deployerPrivateKey);
 
         // Deploy the implementation contract
-        vaultStrategyImplementation = new VaultStrategy();
+        primeUSDCImplementation = new PrimeUSDC();
 
         // Deploy the ProxyAdmin contract with the deployer as the initial owner
         proxyAdmin = new ProxyAdmin(deployer);
@@ -36,9 +36,12 @@ contract Vault_StrategyScript is Script {
         address aaveOracleContract = 0x2Cc0Fc26eD4563A5ce5e8bdcfe1A2878676Ae156;
         address strategist = 0x07a721260416e764618B059811eaf099a940Af14;
         address aerodromePoolContract = 0x6cDcb1C4A4D1C3C6d054b27AC5B77e89eAFb971d;
+        uint256 targetHealthFactor = 10300;
+        uint256 healthFactorBuffer = 300;
+        uint256 strategistFeePercentage = 2000;
 
         bytes memory initData = abi.encodeWithSelector(
-            VaultStrategy.initialize.selector,
+            PrimeUSDC.initialize.selector,
             IERC20(asset),
             initialDeposit,
             initialOwner,
@@ -48,15 +51,18 @@ contract Vault_StrategyScript is Script {
             aaveProtocolDataProviderContract,
             aaveOracleContract,
             strategist,
-            aerodromePoolContract
+            aerodromePoolContract,
+            targetHealthFactor,
+            healthFactorBuffer,
+            strategistFeePercentage
         );
 
         // Deploy the TransparentUpgradeableProxy
-        proxy = new TransparentUpgradeableProxy(address(vaultStrategyImplementation), address(proxyAdmin), initData);
+        proxy = new TransparentUpgradeableProxy(address(primeUSDCImplementation), address(proxyAdmin), initData);
 
-        // The proxy address is now the address of your upgradeable VaultStrategy
-        console.log("Upgradeable VaultStrategy deployed at:", address(proxy));
-        console.log("Implementation address:", address(vaultStrategyImplementation));
+        // The proxy address is now the address of your upgradeable PrimeUSDC
+        console.log("Upgradeable PrimeUSDC deployed at:", address(proxy));
+        console.log("Implementation address:", address(primeUSDCImplementation));
         console.log("ProxyAdmin address:", address(proxyAdmin));
 
         vm.stopBroadcast();
